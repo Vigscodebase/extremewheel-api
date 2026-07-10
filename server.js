@@ -5,8 +5,9 @@ import bcrypt from "bcrypt";
 import mongoose from "mongoose"
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import path from 'path';
-const { logToFile } = require('./logger');
+import { logToFile } from './logger';
 import User from "./models/User.js"
 
 dotenv.config({ debug: true });
@@ -15,6 +16,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Securely load the private key for the Authentication Service
+let privateKey;
+try {
+    privateKey = fs.readFileSync(path.join(__dirname, 'private.pem'), 'utf8');
+} catch (err) {
+    console.error("CRITICAL: private.pem not found. Please generate RSA keys.");
+    process.exit(1);
+}
 
 const whitelist = ['http://192.168.2.63:5173'];
 const corsOptions = {

@@ -3,3 +3,4 @@
 /logs
 /logs/backend.log
 /logs/frontend.log
+*.pem
