@@ -1,0 +1,98 @@
+[2026-07-11T11:08:24.559Z] [DB] ✅ Connected -> extremewheel
+[2026-07-11T11:08:24.584Z] [DB] ✅ User unique indexes verified/created
+[2026-07-11T12:51:27.413Z] [API] START GET /graphql
+[2026-07-11T12:51:27.421Z] [API] END   GET /graphql - 404 (8ms)
+[2026-07-11T17:33:30.224Z] [API] START GET /.env
+[2026-07-11T17:33:30.227Z] [API] END   GET /.env - 404 (3ms)
+[2026-07-11T21:11:01.317Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-11T21:11:01.319Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-11T21:16:58.697Z] [API] START GET /
+[2026-07-11T21:16:58.699Z] [API] END   GET / - 404 (2ms)
+[2026-07-11T21:16:58.778Z] [API] START GET /v1/
+[2026-07-11T21:16:58.781Z] [API] END   GET /v1/ - 404 (3ms)
+[2026-07-11T21:16:58.861Z] [API] START GET /v2/
+[2026-07-11T21:16:58.864Z] [API] END   GET /v2/ - 404 (3ms)
+[2026-07-11T21:16:58.943Z] [API] START GET /docs
+[2026-07-11T21:16:58.945Z] [API] END   GET /docs - 404 (2ms)
+[2026-07-11T21:17:09.682Z] [API] START GET /.env
+[2026-07-11T21:17:09.684Z] [API] END   GET /.env - 404 (2ms)
+[2026-07-11T21:17:11.886Z] [API] START GET /.env.example
+[2026-07-11T21:17:11.889Z] [API] END   GET /.env.example - 404 (3ms)
+[2026-07-11T21:17:12.202Z] [API] START GET /v2/.env
+[2026-07-11T21:17:12.204Z] [API] END   GET /v2/.env - 404 (2ms)
+[2026-07-12T00:37:08.678Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-12T00:37:08.680Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-12T03:05:43.425Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-12T03:05:43.426Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (1ms)
+[2026-07-12T06:35:03.356Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-12T06:35:03.358Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-12T08:41:32.541Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-12T08:41:32.543Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-12T17:36:39.414Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-12T17:36:39.416Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-12T20:23:19.885Z] [API] START GET /.env
+[2026-07-12T20:23:19.886Z] [API] END   GET /.env - 404 (1ms)
+[2026-07-12T23:05:04.948Z] [API] START GET /sonicos/auth
+[2026-07-12T23:05:04.951Z] [API] END   GET /sonicos/auth - 404 (3ms)
+[2026-07-12T23:05:05.087Z] [API] START GET /sonicos/tfa
+[2026-07-12T23:05:05.089Z] [API] END   GET /sonicos/tfa - 404 (2ms)
+[2026-07-12T23:22:30.819Z] [API] START GET /v2/cmdb/system/admin
+[2026-07-12T23:22:30.821Z] [API] END   GET /v2/cmdb/system/admin - 404 (2ms)
+[2026-07-12T23:22:36.786Z] [API] START GET /v2/cmdb/system/admin/admin
+[2026-07-12T23:22:36.788Z] [API] END   GET /v2/cmdb/system/admin/admin - 404 (2ms)
+[2026-07-13T04:20:21.638Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-13T04:20:21.640Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-13T07:48:04.102Z] [API] START GET /.env
+[2026-07-13T07:48:04.103Z] [API] END   GET /.env - 404 (1ms)
+[2026-07-13T10:23:32.179Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T10:23:32.206Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T10:42:10.840Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T10:42:10.865Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T10:44:49.425Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T10:44:49.449Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T10:45:25.929Z] [API] START GET /api/api/permissions
+[2026-07-13T10:45:25.938Z] [API] END   GET /api/api/permissions - 404 (9ms)
+[2026-07-13T10:45:34.578Z] [API] START GET /api/api/permissions
+[2026-07-13T10:45:34.580Z] [API] END   GET /api/api/permissions - 404 (2ms)
+[2026-07-13T10:49:12.057Z] [API] START GET /api
+[2026-07-13T10:49:12.060Z] [API] END   GET /api - 404 (3ms)
+[2026-07-13T10:49:48.873Z] [API] START GET /api/
+[2026-07-13T10:49:48.875Z] [API] END   GET /api/ - 404 (2ms)
+[2026-07-13T10:50:05.090Z] [API] START GET /api/permissions
+[2026-07-13T10:50:05.092Z] [API] END   GET /api/permissions - 404 (2ms)
+[2026-07-13T10:51:28.985Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T10:51:29.011Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T11:06:53.663Z] [API] START GET /api/permissions
+[2026-07-13T11:06:53.670Z] [API] END   GET /api/permissions - 404 (7ms)
+[2026-07-13T11:25:02.453Z] [API] START GET /permissions
+[2026-07-13T11:25:02.456Z] [API] END   GET /permissions - 401 (3ms)
+[2026-07-13T11:33:35.882Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T11:33:35.908Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T11:33:50.589Z] [API] START GET /permissions
+[2026-07-13T11:33:50.597Z] [API] END   GET /permissions - 401 (8ms)
+[2026-07-13T11:36:16.582Z] [DB] ✅ Connected -> extremewheel
+[2026-07-13T11:36:16.606Z] [DB] ✅ User unique indexes verified/created
+[2026-07-13T11:36:31.625Z] [API] START GET /permissions
+[2026-07-13T11:36:31.633Z] [API] END   GET /permissions - 401 (8ms)
+[2026-07-13T12:26:38.325Z] [API] START GET /.env
+[2026-07-13T12:26:38.328Z] [API] END   GET /.env - 404 (3ms)
+[2026-07-13T14:05:13.593Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-13T14:05:13.596Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (3ms)
+[2026-07-13T16:17:34.743Z] [API] START GET /
+[2026-07-13T16:17:34.746Z] [API] END   GET / - 404 (3ms)
+[2026-07-13T16:17:34.824Z] [API] START GET /v1/
+[2026-07-13T16:17:34.826Z] [API] END   GET /v1/ - 404 (2ms)
+[2026-07-13T16:17:34.906Z] [API] START GET /v2/
+[2026-07-13T16:17:34.909Z] [API] END   GET /v2/ - 404 (3ms)
+[2026-07-13T16:17:34.989Z] [API] START GET /docs
+[2026-07-13T16:17:34.991Z] [API] END   GET /docs - 404 (2ms)
+[2026-07-13T16:17:45.752Z] [API] START GET /.env
+[2026-07-13T16:17:45.754Z] [API] END   GET /.env - 404 (2ms)
+[2026-07-14T01:52:11.835Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-14T01:52:11.838Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (3ms)
+[2026-07-14T04:10:20.285Z] [API] START GET /permissions
+[2026-07-14T04:10:20.287Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-14T04:10:40.777Z] [API] START GET /permissions
+[2026-07-14T04:10:40.778Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-14T05:25:40.295Z] [DB] ✅ Connected -> extremewheel
+[2026-07-14T05:25:40.321Z] [DB] ✅ User unique indexes verified/created
