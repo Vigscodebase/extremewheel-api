@@ -19,7 +19,6 @@
   },
   "homepage": "https://github.com/Vigscodebase/extremewheel-api.git#readme",
   "dependencies": {
-    "@tanstack/react-query": "^5.101.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "compression": "^1.8.1",

@@ -96,3 +96,98 @@
 [2026-07-14T04:10:40.778Z] [API] END   GET /permissions - 401 (1ms)
 [2026-07-14T05:25:40.295Z] [DB] ✅ Connected -> extremewheel
 [2026-07-14T05:25:40.321Z] [DB] ✅ User unique indexes verified/created
+[2026-07-14T05:30:07.278Z] [DB] ✅ Connected -> extremewheel
+[2026-07-14T05:30:07.305Z] [DB] ✅ User unique indexes verified/created
+[2026-07-14T05:36:03.034Z] [API] START POST /auth/login
+[2026-07-14T05:36:03.068Z] [API] END   POST /auth/login - 401 (34ms)
+[2026-07-14T05:38:36.234Z] ❌ MONGODB_URI is not set. Check environment variables.
+[2026-07-14T05:41:50.331Z] ❌ MONGODB_URI is not set. Check environment variables.
+[2026-07-14T05:42:12.748Z] ❌ MONGODB_URI is not set. Check environment variables.
+[2026-07-14T06:07:23.081Z] [API] START GET /permissions
+[2026-07-14T06:07:23.083Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-14T06:12:22.289Z] [DB] ✅ Connected -> extremewheel
+[2026-07-14T06:12:22.312Z] [DB] ✅ User unique indexes verified/created
+[2026-07-14T06:12:45.398Z] [DB] ✅ Connected -> extremewheel
+[2026-07-14T06:19:00.567Z] [DB] ✅ Connected -> extremewheel
+[2026-07-14T06:20:06.441Z] [API] START POST /auth/login
+[2026-07-14T06:20:06.627Z] [API] END   POST /auth/login - 401 (186ms)
+[2026-07-14T06:20:15.836Z] [API] START POST /auth/login
+[2026-07-14T06:20:15.842Z] [API] END   POST /auth/login - 401 (6ms)
+[2026-07-14T06:20:22.779Z] [API] START POST /auth/login
+[2026-07-14T06:20:22.901Z] [API] END   POST /auth/login - 200 (122ms)
+[2026-07-14T06:20:23.283Z] [API] START GET /permissions
+[2026-07-14T06:20:23.305Z] [API] START GET /dashboard/summary
+[2026-07-14T06:20:23.312Z] [API] END   GET /permissions - 200 (29ms)
+[2026-07-14T06:20:23.337Z] [API] END   GET /dashboard/summary - 200 (32ms)
+[2026-07-14T06:20:39.924Z] [API] START POST /auth/login
+[2026-07-14T06:20:40.045Z] [API] END   POST /auth/login - 200 (121ms)
+[2026-07-14T06:20:40.346Z] [API] START GET /permissions
+[2026-07-14T06:20:40.354Z] [API] END   GET /permissions - 304 (8ms)
+[2026-07-14T06:21:00.040Z] [API] START POST /auth/login
+[2026-07-14T06:21:00.155Z] [API] END   POST /auth/login - 200 (115ms)
+[2026-07-14T06:21:00.436Z] [API] START GET /permissions
+[2026-07-14T06:21:00.446Z] [API] END   GET /permissions - 304 (10ms)
+[2026-07-14T06:21:00.448Z] [API] START GET /dashboard/summary
+[2026-07-14T06:21:00.462Z] [API] END   GET /dashboard/summary - 304 (14ms)
+[2026-07-14T06:21:12.183Z] [API] START GET /vehicle-notes
+[2026-07-14T06:21:12.194Z] [API] END   GET /vehicle-notes - 200 (11ms)
+[2026-07-14T06:21:20.053Z] [API] START GET /tire-options
+[2026-07-14T06:21:20.060Z] [API] END   GET /tire-options - 200 (7ms)
+[2026-07-14T06:21:20.672Z] [API] START GET /permissions
+[2026-07-14T06:21:20.678Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-14T06:21:40.912Z] [API] START GET /permissions
+[2026-07-14T06:21:40.917Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-14T06:21:48.876Z] [API] START GET /tire-options
+[2026-07-14T06:21:48.883Z] [API] END   GET /tire-options - 304 (7ms)
+[2026-07-14T06:21:51.662Z] [API] START GET /users
+[2026-07-14T06:21:51.670Z] [API] END   GET /users - 200 (8ms)
+[2026-07-14T06:22:01.143Z] [API] START GET /permissions
+[2026-07-14T06:22:01.149Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-14T06:22:03.242Z] [API] START GET /dashboard/summary
+[2026-07-14T06:22:03.255Z] [API] END   GET /dashboard/summary - 304 (13ms)
+[2026-07-14T06:25:03.821Z] [API] START GET /permissions
+[2026-07-14T06:25:03.833Z] [API] END   GET /permissions - 304 (12ms)
+[2026-07-14T06:25:03.834Z] [API] START GET /dashboard/summary
+[2026-07-14T06:25:03.852Z] [API] END   GET /dashboard/summary - 304 (18ms)
+[2026-07-14T06:26:00.998Z] [API] START GET /permissions
+[2026-07-14T06:26:01.000Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-14T06:26:17.103Z] [API] START POST /auth/login
+[2026-07-14T06:26:17.220Z] [API] END   POST /auth/login - 200 (117ms)
+[2026-07-14T06:26:17.547Z] [API] START GET /dashboard/summary
+[2026-07-14T06:26:17.557Z] [API] START GET /permissions
+[2026-07-14T06:26:17.564Z] [API] END   GET /dashboard/summary - 200 (17ms)
+[2026-07-14T06:26:17.572Z] [API] END   GET /permissions - 200 (15ms)
+[2026-07-14T06:26:26.600Z] [API] START POST /auth/login
+[2026-07-14T06:26:26.714Z] [API] END   POST /auth/login - 200 (114ms)
+[2026-07-14T06:26:34.418Z] [API] START GET /users
+[2026-07-14T06:26:34.426Z] [API] END   GET /users - 200 (8ms)
+[2026-07-14T06:26:36.053Z] [API] START GET /tire-options
+[2026-07-14T06:26:36.060Z] [API] END   GET /tire-options - 200 (7ms)
+[2026-07-14T06:28:46.626Z] [API] START GET /tire-options
+[2026-07-14T06:28:46.634Z] [API] END   GET /tire-options - 304 (8ms)
+[2026-07-14T06:28:46.997Z] [API] START GET /permissions
+[2026-07-14T06:28:47.006Z] [API] END   GET /permissions - 304 (9ms)
+[2026-07-14T06:28:47.950Z] [API] START GET /vehicle-notes
+[2026-07-14T06:28:47.959Z] [API] END   GET /vehicle-notes - 200 (9ms)
+[2026-07-14T06:28:50.392Z] [API] START GET /users
+[2026-07-14T06:28:50.398Z] [API] END   GET /users - 304 (6ms)
+[2026-07-14T06:28:51.669Z] [API] START GET /dashboard/summary
+[2026-07-14T06:28:51.684Z] [API] END   GET /dashboard/summary - 304 (15ms)
+[2026-07-14T06:29:07.280Z] [API] START GET /permissions
+[2026-07-14T06:29:07.285Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-14T06:37:48.400Z] [API] START GET /permissions
+[2026-07-14T06:37:48.406Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-14T06:37:53.441Z] [API] START POST /auth/login
+[2026-07-14T06:37:53.551Z] [API] END   POST /auth/login - 200 (110ms)
+[2026-07-14T06:37:53.849Z] [API] START GET /dashboard/summary
+[2026-07-14T06:37:53.865Z] [API] END   GET /dashboard/summary - 304 (16ms)
+[2026-07-14T06:38:13.857Z] [API] START GET /permissions
+[2026-07-14T06:38:13.862Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-14T06:38:34.131Z] [API] START GET /permissions
+[2026-07-14T06:38:34.136Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-14T06:39:07.405Z] [API] START GET /dashboard/summary
+[2026-07-14T06:39:07.417Z] [API] START GET /permissions
+[2026-07-14T06:39:07.421Z] [API] END   GET /dashboard/summary - 304 (16ms)
+[2026-07-14T06:39:07.423Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-14T06:39:27.649Z] [API] START GET /permissions
+[2026-07-14T06:39:27.655Z] [API] END   GET /permissions - 304 (6ms)
