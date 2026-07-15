@@ -16,8 +16,8 @@ export async function requireAuth(req, res, next) {
 
     const payload = verifyToken(token);
 
-    // OPTIMIZATION: Use select() to fetch only essential auth claims and lean() to bypass heavy Mongoose hydration
-    const user = await User.findById(payload.sub)
+    // OPTIMIZATION: Find by email since 'sub' (ID) is no longer in the token
+    const user = await User.findOne({ email: payload.email })
       .select("_id name email role createdAt")
       .lean();
 
@@ -27,7 +27,7 @@ export async function requireAuth(req, res, next) {
 
     req.user = user;
 
-    // Rolling session check
+    // Rolling session check (now works because expiresIn provides payload.exp)
     const secondsLeft = payload.exp - Math.floor(Date.now() / 1000);
     if (secondsLeft < RENEW_THRESHOLD_SECONDS) {
       res.setHeader("x-refresh-token", signToken(user));

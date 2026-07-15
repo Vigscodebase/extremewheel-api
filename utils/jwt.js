@@ -15,7 +15,7 @@ let publicKey;
 
 try {
   privateKey = fs.readFileSync('/etc/extremewheel-secrets/private.pem', 'utf8');
-  publicKey = fs.readFileSync('/etc/extremewheel-secrets/public.pem', 'utf8');;
+  publicKey = fs.readFileSync('/etc/extremewheel-secrets/public.pem', 'utf8');
 } catch (err) {
   console.error("CRITICAL: RSA key files not found. Ensure private.pem and public.pem are in the root directory.");
   logToFile(`[PRIVATE_PUBLIC_KEY] CRITICAL: RSA key files not found. Ensure private.pem and public.pem are in the root directory.`);
@@ -25,14 +25,14 @@ try {
 function signToken(user) {
   return jwt.sign(
     {
-      sub: user._id.toString(),
+      name: user.name,
       email: user.email,
       role: user.role,
     },
     privateKey,
     {
-      algorithm: "RS256", // Explicitly use asymmetric RSA signing
-      expiresIn: process.env.JWT_EXPIRES_IN || "45m",
+      algorithm: "RS256",
+      expiresIn: "15m",
     }
   );
 }

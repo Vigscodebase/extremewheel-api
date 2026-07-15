@@ -137,16 +137,17 @@ authRouter.post("/login", authLimiter, async (req, res, next) => {
         }
 
         const token = signToken(user);
-        const { _id, name, email: userEmail, role, createdAt } = user;
-        res.json({ token, user: { _id, name, email: userEmail, role, createdAt } });
+
+        // Return ONLY the token. No user object.
+        res.json({ token });
     } catch (err) {
         next(err);
     }
 });
 
 authRouter.get("/me", requireAuth, async (req, res) => {
-    const { _id, name, email, role, createdAt } = req.user;
-    res.json({ user: { _id, name, email, role, createdAt } });
+    const { name, email, role } = req.user;
+    res.json({ user: { name, email, role } });
 });
 
 // --- User Routes ---
@@ -397,6 +398,27 @@ roleRouter.post("/", requirePermission("user-management"), async (req, res, next
     }
 });
 
+// --- Navigation Routes ---
+const navigationRouter = express.Router();
+navigationRouter.use(requireAuth);
+
+navigationRouter.get("/", (req, res, next) => {
+    try {
+        // You can eventually fetch this from a database collection if you want fully dynamic menus.
+        // For now, we are serving the centralized config from the backend.
+        const NAV = [
+            { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
+            { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
+            { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
+            { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
+            { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
+        ];
+        res.json({ nav: NAV });
+    } catch (err) {
+        next(err);
+    }
+});
+
 // ==========================================
 // MOUNTING ROUTERS
 // ==========================================
@@ -407,6 +429,7 @@ app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/roles", roleRouter);
+app.use("/navigation", navigationRouter);
 
 app.use((req, res) => {
     res.status(404).json({ message: "Not found." });
