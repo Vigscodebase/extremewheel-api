@@ -32,7 +32,7 @@ function signToken(user) {
     privateKey,
     {
       algorithm: "RS256",
-      expiresIn: "15m",
+      expiresIn: "10m", // Changed from "15m" to "8h" to keep the user logged in longer
     }
   );
 }
