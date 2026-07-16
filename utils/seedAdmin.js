@@ -36,8 +36,18 @@ async function seed() {
   );
   console.log("[seed] ✅ System roles verified/seeded.");
 
-  // 2. Seed Master Admin
-  const email = "admin@clickmatix.com".toLowerCase();
+  // 2. Seed Master Admin — credentials come from env so no real password
+  // ever lives in source control. Set ADMIN_SEED_EMAIL / ADMIN_SEED_PASSWORD
+  // in your .env before running this script, then change the password on
+  // first login.
+  const email = (process.env.ADMIN_SEED_EMAIL || "admin@clickmatix.com").toLowerCase();
+  const password = process.env.ADMIN_SEED_PASSWORD;
+
+  if (!password) {
+    console.error("[seed] ❌ ADMIN_SEED_PASSWORD is not set in .env — refusing to seed with a default password.");
+    process.exit(1);
+  }
+
   const existing = await User.findOne({ email });
 
   if (existing) {
@@ -48,7 +58,7 @@ async function seed() {
   await User.create({
     name: "Admin",
     email,
-    password: "admin@123",
+    password,
     role: "admin", // Matches role_key
   });
 

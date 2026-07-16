@@ -3,7 +3,7 @@ import User from "../models/User.js";
 import Permission from "../models/Permission.js";
 import { signToken, verifyToken } from "../utils/jwt.js";
 
-const RENEW_THRESHOLD_SECONDS = 5 * 60; // 5-minute rolling window
+const RENEW_THRESHOLD_SECONDS = Number(process.env.JWT_RENEW_THRESHOLD_SECONDS) || 5 * 60; // rolling-refresh window
 
 export const requireAuth = async (req, res, next) => {
   try {
@@ -24,8 +24,8 @@ export const requireAuth = async (req, res, next) => {
     const nowInSeconds = Math.floor(Date.now() / 1000);
     const timeLeft = decoded.exp - nowInSeconds;
 
-    // If the token expires in less than 5 minutes (300 seconds), issue a new one
-    if (timeLeft < 300) {
+    // If the token is close to expiring, issue a new one (rolling session)
+    if (timeLeft < RENEW_THRESHOLD_SECONDS) {
       // Re-sign using the data already in the token payload
       const newToken = signToken({
         name: decoded.name,

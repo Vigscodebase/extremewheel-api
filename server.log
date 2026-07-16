@@ -1,0 +1,216 @@
+[2026-07-16T05:17:56.989Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:17:57.003Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T05:17:57.032Z] [DB] ✅ User unique indexes verified/created
+[2026-07-16T05:17:57.492Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:17:58.494Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:17:59.996Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:02.002Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:04.506Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:07.509Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:11.012Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:15.015Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:19.517Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:24.518Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:29.520Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:18:34.521Z] [Redis] ⚠️ connect ECONNREFUSED 127.0.0.1:6379
+[2026-07-16T05:25:57.298Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T05:25:57.312Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T05:25:57.353Z] [DB] ✅ User unique indexes verified/created
+[2026-07-16T05:29:34.267Z] [API] START POST /auth/login
+[2026-07-16T05:29:34.469Z] [API] END   POST /auth/login - 200 (202ms)
+[2026-07-16T05:29:34.956Z] [API] START GET /tire-options
+[2026-07-16T05:29:34.966Z] [API] END   GET /tire-options - 200 (10ms)
+[2026-07-16T05:29:34.967Z] [API] START GET /permissions
+[2026-07-16T05:29:34.973Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-16T05:29:39.952Z] [API] START GET /dashboard/summary
+[2026-07-16T05:29:39.972Z] [API] END   GET /dashboard/summary - 200 (20ms)
+[2026-07-16T05:29:45.436Z] [API] START GET /users
+[2026-07-16T05:29:45.442Z] [API] END   GET /users - 200 (6ms)
+[2026-07-16T05:29:54.205Z] [API] START GET /tire-options
+[2026-07-16T05:29:54.211Z] [API] END   GET /tire-options - 304 (6ms)
+[2026-07-16T05:29:55.205Z] [API] START GET /permissions
+[2026-07-16T05:29:55.211Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-16T05:29:55.862Z] [API] START GET /vehicle-notes
+[2026-07-16T05:29:55.868Z] [API] END   GET /vehicle-notes - 200 (6ms)
+[2026-07-16T05:34:10.632Z] [API] START POST /auth/login
+[2026-07-16T05:34:10.751Z] [API] END   POST /auth/login - 200 (119ms)
+[2026-07-16T05:34:11.258Z] [API] START GET /vehicle-notes
+[2026-07-16T05:34:11.264Z] [API] END   GET /vehicle-notes - 304 (6ms)
+[2026-07-16T05:34:11.266Z] [API] START GET /permissions
+[2026-07-16T05:34:11.270Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:34:26.303Z] [API] START GET /dashboard/summary
+[2026-07-16T05:34:26.314Z] [API] END   GET /dashboard/summary - 304 (11ms)
+[2026-07-16T05:34:26.928Z] [API] START GET /users
+[2026-07-16T05:34:26.936Z] [API] END   GET /users - 304 (8ms)
+[2026-07-16T05:34:27.154Z] [API] START GET /permissions
+[2026-07-16T05:34:27.160Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-16T05:35:07.593Z] [API] START GET /permissions
+[2026-07-16T05:35:07.598Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-16T05:35:47.826Z] [API] START GET /permissions
+[2026-07-16T05:35:47.830Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:35:48.047Z] [API] START PUT /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:35:48.065Z] [API] END   PUT /users/6a55d4d4746a590ddcc4ac1e - 200 (18ms)
+[2026-07-16T05:35:48.282Z] [API] START GET /users
+[2026-07-16T05:35:48.286Z] [API] END   GET /users - 200 (4ms)
+[2026-07-16T05:36:03.232Z] [API] START PUT /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:36:03.239Z] [API] END   PUT /users/6a55d4d4746a590ddcc4ac1e - 200 (7ms)
+[2026-07-16T05:36:03.458Z] [API] START GET /users
+[2026-07-16T05:36:03.463Z] [API] END   GET /users - 200 (5ms)
+[2026-07-16T05:36:08.061Z] [API] START GET /permissions
+[2026-07-16T05:36:08.066Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-16T05:36:28.289Z] [API] START GET /permissions
+[2026-07-16T05:36:28.293Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:36:31.401Z] [API] START PUT /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:36:31.410Z] [API] END   PUT /users/6a55d4d4746a590ddcc4ac1e - 200 (9ms)
+[2026-07-16T05:36:31.630Z] [API] START GET /users
+[2026-07-16T05:36:31.635Z] [API] END   GET /users - 200 (5ms)
+[2026-07-16T05:36:39.417Z] [API] START DELETE /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:36:39.421Z] [Centralized Error] TypeError: Cannot read properties of undefined (reading 'toString')
+[2026-07-16T05:36:39.422Z] [API] END   DELETE /users/6a55d4d4746a590ddcc4ac1e - 500 (5ms)
+[2026-07-16T05:36:43.645Z] [API] START GET /permissions
+[2026-07-16T05:36:43.646Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-16T05:36:43.649Z] [API] START GET /auth/me
+[2026-07-16T05:36:43.651Z] [API] END   GET /auth/me - 200 (2ms)
+[2026-07-16T05:36:44.091Z] [API] START GET /users
+[2026-07-16T05:36:44.096Z] [API] END   GET /users - 200 (5ms)
+[2026-07-16T05:41:45.057Z] [API] START GET /permissions
+[2026-07-16T05:41:45.064Z] [API] END   GET /permissions - 200 (7ms)
+[2026-07-16T05:43:25.489Z] [API] START GET /permissions
+[2026-07-16T05:43:25.493Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:44:05.719Z] [API] START GET /permissions
+[2026-07-16T05:44:05.722Z] [API] END   GET /permissions - 304 (3ms)
+[2026-07-16T05:44:25.960Z] [API] START GET /permissions
+[2026-07-16T05:44:25.964Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:44:46.193Z] [API] START GET /permissions
+[2026-07-16T05:44:46.197Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:45:06.428Z] [API] START GET /permissions
+[2026-07-16T05:45:06.432Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:45:26.661Z] [API] START GET /permissions
+[2026-07-16T05:45:26.665Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:46:07.047Z] [API] START GET /permissions
+[2026-07-16T05:46:07.051Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:46:16.088Z] [API] START GET /permissions
+[2026-07-16T05:46:16.089Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-16T05:46:16.102Z] [API] START GET /auth/me
+[2026-07-16T05:46:16.104Z] [API] END   GET /auth/me - 200 (2ms)
+[2026-07-16T05:46:16.516Z] [API] START GET /users
+[2026-07-16T05:46:16.521Z] [API] END   GET /users - 304 (5ms)
+[2026-07-16T05:46:19.734Z] [API] START GET /permissions
+[2026-07-16T05:46:19.735Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-16T05:46:19.748Z] [API] START GET /auth/me
+[2026-07-16T05:46:19.750Z] [API] END   GET /auth/me - 200 (2ms)
+[2026-07-16T05:46:20.050Z] [API] START GET /users
+[2026-07-16T05:46:20.055Z] [API] END   GET /users - 304 (5ms)
+[2026-07-16T05:46:22.645Z] [API] START GET /permissions
+[2026-07-16T05:46:22.647Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-16T05:46:22.654Z] [API] START GET /auth/me
+[2026-07-16T05:46:22.655Z] [API] END   GET /auth/me - 200 (1ms)
+[2026-07-16T05:46:22.944Z] [API] START GET /users
+[2026-07-16T05:46:22.950Z] [API] END   GET /users - 304 (6ms)
+[2026-07-16T05:46:45.101Z] [API] START POST /auth/login
+[2026-07-16T05:46:45.217Z] [API] END   POST /auth/login - 200 (116ms)
+[2026-07-16T05:46:45.500Z] [API] START GET /permissions
+[2026-07-16T05:46:45.504Z] [API] END   GET /permissions - 200 (4ms)
+[2026-07-16T05:46:45.505Z] [API] START GET /users
+[2026-07-16T05:46:45.510Z] [API] END   GET /users - 304 (5ms)
+[2026-07-16T05:47:00.260Z] [API] START DELETE /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:47:00.263Z] [Centralized Error] TypeError: Cannot read properties of undefined (reading 'toString')
+[2026-07-16T05:47:00.264Z] [API] END   DELETE /users/6a55d4d4746a590ddcc4ac1e - 500 (4ms)
+[2026-07-16T05:47:05.725Z] [API] START GET /permissions
+[2026-07-16T05:47:05.732Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-16T05:48:26.151Z] [API] START GET /permissions
+[2026-07-16T05:48:26.156Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-16T05:50:46.587Z] [API] START GET /permissions
+[2026-07-16T05:50:46.591Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-16T05:53:04.177Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T05:53:47.038Z] [API] START GET /permissions
+[2026-07-16T05:53:47.045Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-16T05:56:04.070Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T05:56:04.084Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T05:56:04.113Z] [DB] ✅ User unique indexes verified/created
+[2026-07-16T05:56:17.971Z] [API] START GET /permissions
+[2026-07-16T05:56:17.979Z] [API] END   GET /permissions - 401 (8ms)
+[2026-07-16T05:56:18.050Z] [API] START GET /auth/me
+[2026-07-16T05:56:18.055Z] [API] END   GET /auth/me - 200 (5ms)
+[2026-07-16T05:56:18.341Z] [API] START GET /users
+[2026-07-16T05:56:18.357Z] [API] END   GET /users - 304 (16ms)
+[2026-07-16T05:56:31.055Z] [API] START POST /auth/login
+[2026-07-16T05:56:31.204Z] [API] END   POST /auth/login - 200 (149ms)
+[2026-07-16T05:56:31.518Z] [API] START GET /permissions
+[2026-07-16T05:56:31.526Z] [API] END   GET /permissions - 200 (8ms)
+[2026-07-16T05:56:33.640Z] [API] START GET /dashboard/summary
+[2026-07-16T05:56:33.656Z] [API] END   GET /dashboard/summary - 304 (16ms)
+[2026-07-16T05:56:37.099Z] [API] START GET /tire-options
+[2026-07-16T05:56:37.105Z] [API] END   GET /tire-options - 304 (6ms)
+[2026-07-16T05:56:54.385Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T05:56:54.397Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T05:56:54.426Z] [DB] ✅ User unique indexes verified/created
+[2026-07-16T05:57:00.161Z] [API] START GET /permissions
+[2026-07-16T05:57:00.169Z] [API] END   GET /permissions - 401 (8ms)
+[2026-07-16T05:57:00.175Z] [API] START GET /auth/me
+[2026-07-16T05:57:00.180Z] [API] END   GET /auth/me - 200 (5ms)
+[2026-07-16T05:57:00.478Z] [API] START GET /tire-options
+[2026-07-16T05:57:00.495Z] [API] END   GET /tire-options - 304 (17ms)
+[2026-07-16T05:57:02.990Z] [API] START GET /vehicle-notes
+[2026-07-16T05:57:02.997Z] [API] END   GET /vehicle-notes - 200 (7ms)
+[2026-07-16T05:57:07.753Z] [API] START GET /users
+[2026-07-16T05:57:07.764Z] [API] END   GET /users - 304 (11ms)
+[2026-07-16T05:57:10.021Z] [API] START GET /dashboard/summary
+[2026-07-16T05:57:10.036Z] [API] END   GET /dashboard/summary - 304 (15ms)
+[2026-07-16T05:57:14.625Z] [API] START DELETE /users/6a55d4d4746a590ddcc4ac1e
+[2026-07-16T05:57:14.628Z] [API] END   DELETE /users/6a55d4d4746a590ddcc4ac1e - 401 (3ms)
+[2026-07-16T05:57:42.286Z] [API] START POST /auth/login
+[2026-07-16T05:57:42.429Z] [API] END   POST /auth/login - 200 (143ms)
+[2026-07-16T05:57:42.741Z] [API] START GET /users
+[2026-07-16T05:57:42.750Z] [API] END   GET /users - 304 (9ms)
+[2026-07-16T05:57:42.753Z] [API] START GET /permissions
+[2026-07-16T05:57:42.761Z] [API] END   GET /permissions - 200 (9ms)
+[2026-07-16T06:02:38.278Z] [API] START GET /permissions
+[2026-07-16T06:02:38.285Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-16T06:04:25.480Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T06:04:25.511Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T06:04:38.705Z] [API] START GET /permissions
+[2026-07-16T06:04:38.712Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-16T07:54:59.171Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-16T07:54:59.183Z] [DB] ✅ Connected -> extremewheel
+[2026-07-16T07:55:08.977Z] [AppGuideImport] 1000/30379 rows upserted
+[2026-07-16T07:55:10.126Z] [AppGuideImport] 2000/30379 rows upserted
+[2026-07-16T07:55:11.521Z] [AppGuideImport] 3000/30379 rows upserted
+[2026-07-16T07:55:13.410Z] [AppGuideImport] 4000/30379 rows upserted
+[2026-07-16T07:55:15.764Z] [AppGuideImport] 5000/30379 rows upserted
+[2026-07-16T07:55:18.653Z] [AppGuideImport] 6000/30379 rows upserted
+[2026-07-16T07:55:22.530Z] [AppGuideImport] 7000/30379 rows upserted
+[2026-07-16T07:55:26.438Z] [AppGuideImport] 8000/30379 rows upserted
+[2026-07-16T07:55:31.630Z] [AppGuideImport] 9000/30379 rows upserted
+[2026-07-16T07:55:36.509Z] [AppGuideImport] 10000/30379 rows upserted
+[2026-07-16T07:55:42.163Z] [AppGuideImport] 11000/30379 rows upserted
+[2026-07-16T07:55:48.263Z] [AppGuideImport] 12000/30379 rows upserted
+[2026-07-16T07:55:54.647Z] [AppGuideImport] 13000/30379 rows upserted
+[2026-07-16T07:56:01.357Z] [AppGuideImport] 14000/30379 rows upserted
+[2026-07-16T07:56:08.346Z] [AppGuideImport] 15000/30379 rows upserted
+[2026-07-16T07:56:17.963Z] [AppGuideImport] 16000/30379 rows upserted
+[2026-07-16T07:56:26.441Z] [AppGuideImport] 17000/30379 rows upserted
+[2026-07-16T07:56:35.178Z] [AppGuideImport] 18000/30379 rows upserted
+[2026-07-16T07:56:44.360Z] [AppGuideImport] 19000/30379 rows upserted
+[2026-07-16T07:56:54.694Z] [AppGuideImport] 20000/30379 rows upserted
+[2026-07-16T07:57:04.790Z] [AppGuideImport] 21000/30379 rows upserted
+[2026-07-16T07:57:16.388Z] [AppGuideImport] 22000/30379 rows upserted
+[2026-07-16T07:57:28.084Z] [AppGuideImport] 23000/30379 rows upserted
+[2026-07-16T07:57:39.564Z] [AppGuideImport] 24000/30379 rows upserted
+[2026-07-16T07:57:52.040Z] [AppGuideImport] 25000/30379 rows upserted
+[2026-07-16T07:58:03.819Z] [AppGuideImport] 26000/30379 rows upserted
+[2026-07-16T07:58:16.826Z] [AppGuideImport] 27000/30379 rows upserted
+[2026-07-16T07:58:29.594Z] [AppGuideImport] 28000/30379 rows upserted
+[2026-07-16T07:58:43.177Z] [AppGuideImport] 29000/30379 rows upserted
+[2026-07-16T07:58:57.428Z] [AppGuideImport] 30000/30379 rows upserted
+[2026-07-16T07:59:03.292Z] [AppGuideImport] ✅ Completed: 30378/30379 rows upserted from /var/www/extremewheel/server/tblAppGuide-Templatenew.xlsx
+[2026-07-16T08:58:50.627Z] [API] START POST /auth/login
+[2026-07-16T08:58:50.742Z] [API] END   POST /auth/login - 200 (115ms)
+[2026-07-16T08:58:51.061Z] [API] START GET /users
+[2026-07-16T08:58:51.068Z] [API] END   GET /users - 200 (7ms)
+[2026-07-16T08:58:51.237Z] [API] START GET /permissions
+[2026-07-16T08:58:51.242Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-16T08:58:53.079Z] [API] START GET /vehicle-notes
+[2026-07-16T08:58:53.083Z] [API] END   GET /vehicle-notes - 200 (4ms)
+[2026-07-16T08:58:55.025Z] [API] START GET /tire-options
+[2026-07-16T08:58:55.030Z] [API] END   GET /tire-options - 200 (5ms)

@@ -23,8 +23,8 @@ const connectDB = async () => {
   // 4. Initial Connection with Production Options
   try {
     const options = {
-      maxPoolSize: 50, // Adjust based on your traffic (default is 100)
-      serverSelectionTimeoutMS: 5000, // Fail after 5 seconds instead of hanging indefinitely
+      maxPoolSize: Number(process.env.DB_MAX_POOL_SIZE) || 50, // Adjust based on your traffic (default is 100)
+      serverSelectionTimeoutMS: Number(process.env.DB_SERVER_SELECTION_TIMEOUT_MS) || 5000, // Fail fast instead of hanging indefinitely
       autoIndex: false, // MUST be false in large production DBs to prevent performance degradation
     };
 

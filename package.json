@@ -8,7 +8,10 @@
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "seed:admin": "node utils/seedAdmin.js",
+    "import:app-guide": "node scripts/importAppGuide.js",
+    "worker:app-guide": "node workers/appGuideWorker.js"
   },
   "repository": {
     "type": "git",
@@ -21,14 +24,17 @@
   "dependencies": {
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.34.6",
     "compression": "^1.8.1",
     "crypto": "^1.0.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
+    "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.4",
+    "xlsx": "^0.18.5",
     "zustand": "^5.0.14"
   }
 }

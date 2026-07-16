@@ -18,10 +18,12 @@ import Permission from "./models/Permission.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import Role from "./models/Role.js";
+import AppGuide from "./models/AppGuide.js";
 
 // Middleware
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { signToken } from "./utils/jwt.js";
+import { cached } from "./config/redis.js";
 
 dotenv.config({ debug: true });
 
@@ -32,8 +34,32 @@ const __dirname = path.dirname(__filename);
 
 app.use(compression());
 app.use(helmet());
+
+// CORS is opt-in: unset CORS_ORIGINS (the default) keeps the current
+// same-origin-only behavior exactly as before. Set a comma-separated list
+// in .env to allow specific browser origins (e.g. a separate marketing site
+// or a mobile shell) without touching this file again.
+// const corsOrigins = (process.env.CORS_ORIGINS || "")
+//     .split(",")
+//     .map((o) => o.trim())
+//     .filter(Boolean);
+// if (corsOrigins.length > 0) {
+//     const cors = (await import("cors")).default;
+//     app.use(cors({ origin: corsOrigins, credentials: true, exposedHeaders: ["x-refresh-token"] }));
+// }
+
 app.use(express.json({ limit: "2mb" }));
 app.set('trust proxy', 1);
+
+// General API-wide rate limit (defense in depth alongside the stricter
+// auth-only limiter below).
+const apiLimiter = rateLimit({
+    windowMs: Number(process.env.API_RATE_LIMIT_WINDOW_MS) || 60 * 1000,
+    max: Number(process.env.API_RATE_LIMIT_MAX) || 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use(apiLimiter);
 
 // Request logger middleware
 app.use((req, res, next) => {
@@ -81,8 +107,8 @@ app.get("/health", (req, res) => {
 // --- Auth Routes ---
 const authRouter = express.Router();
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 30,
+    windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+    max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 30,
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: "Too many attempts. Please try again in a few minutes." },
@@ -193,18 +219,47 @@ userRouter.put("/:id", requireAuth, async (req, res, next) => {
 
 userRouter.delete("/:id", requireAuth, async (req, res, next) => {
     try {
-        if (req.params.id === req.user._id.toString()) {
+        // 1. Safely grab the ID, whether your auth middleware uses '_id' or 'id'
+        const loggedInUserId = req.user?._id || req.user?.id;
+
+        // 2. Ensure we actually have a logged-in user ID to compare against
+        if (!loggedInUserId) {
+            return res.status(401).json({ message: "Authentication required or user data malformed." });
+        }
+
+        // 3. Compare safely
+        if (req.params.id === loggedInUserId.toString()) {
             return res.status(400).json({ message: "You can't delete your own account while signed in." });
         }
+
         const user = await User.findByIdAndDelete(req.params.id);
-        if (!user) return res.status(404).json({ message: "User not found." });
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
         res.json({ success: true });
-    } catch (err) { next(err); }
+    } catch (err) {
+        next(err);
+    }
 });
+
+// --- Shared page/navigation registry ---
+// Single source of truth for every page key + its nav metadata, used by both
+// the permissions matrix (below) and the /navigation router. Previously this
+// list was duplicated in two places and could drift out of sync; now it's
+// defined once and derived everywhere else.
+const NAV_PAGES = [
+    { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
+    { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
+    { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
+    { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
+    { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
+];
+const ALL_PAGE_KEYS = NAV_PAGES.map((p) => p.key);
 
 // --- Permission Routes ---
 const permissionRouter = express.Router();
-const ALL_PAGE_KEYS = ["dashboard", "user-management", "tire-comparison", "tire-options", "vehicle-notes"];
 const DEFAULTS = {
     key: "global",
     matrix: {
@@ -404,24 +459,97 @@ navigationRouter.use(requireAuth);
 
 navigationRouter.get("/", (req, res, next) => {
     try {
-        // You can eventually fetch this from a database collection if you want fully dynamic menus.
-        // For now, we are serving the centralized config from the backend.
-        const NAV = [
-            { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
-            { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
-            { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
-            { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
-            { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
-        ];
-        res.json({ nav: NAV });
+        // Served from the single NAV_PAGES registry above. Move this to a DB
+        // collection later (admin-editable menus) without touching callers —
+        // the response shape stays the same.
+        res.json({ nav: NAV_PAGES });
     } catch (err) {
         next(err);
     }
 });
 
-// ==========================================
-// MOUNTING ROUTERS
-// ==========================================
+// --- Application Guide Routes (Tab 3 cascading lookup + Tab 5 tech data) ---
+// Read-heavy, rarely-changing reference data imported from the client's
+// tblAppGuide xlsx (see scripts/importAppGuide.js), so every list here is
+// cached in Redis for APP_GUIDE_CACHE_TTL_SECONDS and only re-hits Mongo on
+// a cache miss or after a re-import invalidates the "app-guide:" prefix.
+const appGuideRouter = express.Router();
+appGuideRouter.use(requireAuth);
+const APP_GUIDE_CACHE_TTL_SECONDS = Number(process.env.APP_GUIDE_CACHE_TTL_SECONDS) || 3600;
+
+appGuideRouter.get("/years", async (req, res, next) => {
+    try {
+        const years = await cached("app-guide:years", APP_GUIDE_CACHE_TTL_SECONDS, () =>
+            AppGuide.distinct("txtYear").then((y) => y.filter(Boolean).sort().reverse())
+        );
+        res.json({ years });
+    } catch (err) { next(err); }
+});
+
+appGuideRouter.get("/makes", async (req, res, next) => {
+    try {
+        const { year } = req.query;
+        if (!year) return res.status(400).json({ message: "year is required." });
+        const makes = await cached(`app-guide:makes:${year}`, APP_GUIDE_CACHE_TTL_SECONDS, () =>
+            AppGuide.distinct("txtMake", { txtYear: year }).then((m) => m.filter(Boolean).sort())
+        );
+        res.json({ makes });
+    } catch (err) { next(err); }
+});
+
+appGuideRouter.get("/models", async (req, res, next) => {
+    try {
+        const { year, make } = req.query;
+        if (!year || !make) return res.status(400).json({ message: "year and make are required." });
+        const models = await cached(`app-guide:models:${year}:${make}`, APP_GUIDE_CACHE_TTL_SECONDS, () =>
+            AppGuide.distinct("txtModel", { txtYear: year, txtMake: make }).then((m) => m.filter(Boolean).sort())
+        );
+        res.json({ models });
+    } catch (err) { next(err); }
+});
+
+appGuideRouter.get("/types", async (req, res, next) => {
+    try {
+        const { year, make, model } = req.query;
+        if (!year || !make || !model) return res.status(400).json({ message: "year, make and model are required." });
+        const types = await cached(`app-guide:types:${year}:${make}:${model}`, APP_GUIDE_CACHE_TTL_SECONDS, async () => {
+            const rows = await AppGuide.find({ txtYear: year, txtMake: make, txtModel: model })
+                .select("txtType txtOption -_id")
+                .lean();
+            const seen = new Set();
+            return rows
+                .map((r) => ({ type: r.txtType, option: r.txtOption }))
+                .filter((r) => {
+                    const k = `${r.type}|${r.option}`;
+                    if (seen.has(k)) return false;
+                    seen.add(k);
+                    return true;
+                });
+        });
+        res.json({ types });
+    } catch (err) { next(err); }
+});
+
+// Full fitment + wheel-offset record for the final Year/Make/Model/Type
+// selection — this is what Tab 5's tech data / offset chart renders.
+appGuideRouter.get("/fitment", async (req, res, next) => {
+    try {
+        const { year, make, model, type, option } = req.query;
+        if (!year || !make || !model || !type) {
+            return res.status(400).json({ message: "year, make, model and type are required." });
+        }
+        const query = { txtYear: year, txtMake: make, txtModel: model, txtType: type };
+        if (option) query.txtOption = option;
+
+        const cacheKey = `app-guide:fitment:${year}:${make}:${model}:${type}:${option || ""}`;
+        const fitment = await cached(cacheKey, APP_GUIDE_CACHE_TTL_SECONDS, () =>
+            AppGuide.find(query).lean()
+        );
+        res.json({ fitment });
+    } catch (err) { next(err); }
+});
+
+
 app.use("/auth", authRouter);
 app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
@@ -429,6 +557,7 @@ app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/roles", roleRouter);
+app.use("/app-guide", appGuideRouter);
 app.use("/navigation", navigationRouter);
 
 app.use((req, res) => {
