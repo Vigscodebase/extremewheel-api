@@ -26,8 +26,8 @@ export const requireAuth = async (req, res, next) => {
 
     // If the token is close to expiring, issue a new one (rolling session)
     if (timeLeft < RENEW_THRESHOLD_SECONDS) {
-      // Re-sign using the data already in the token payload
       const newToken = signToken({
+        _id: decoded._id, // <-- Add this!
         name: decoded.name,
         email: decoded.email,
         role: decoded.role

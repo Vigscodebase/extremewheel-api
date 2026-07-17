@@ -24,6 +24,7 @@ import AppGuide from "./models/AppGuide.js";
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { signToken } from "./utils/jwt.js";
 import { cached } from "./config/redis.js";
+import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
 
 dotenv.config({ debug: true });
 
@@ -39,14 +40,14 @@ app.use(helmet());
 // same-origin-only behavior exactly as before. Set a comma-separated list
 // in .env to allow specific browser origins (e.g. a separate marketing site
 // or a mobile shell) without touching this file again.
-// const corsOrigins = (process.env.CORS_ORIGINS || "")
-//     .split(",")
-//     .map((o) => o.trim())
-//     .filter(Boolean);
-// if (corsOrigins.length > 0) {
-//     const cors = (await import("cors")).default;
-//     app.use(cors({ origin: corsOrigins, credentials: true, exposedHeaders: ["x-refresh-token"] }));
-// }
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+if (corsOrigins.length > 0) {
+    const cors = (await import("cors")).default;
+    app.use(cors({ origin: corsOrigins, credentials: true, exposedHeaders: ["x-refresh-token"] }));
+}
 
 app.use(express.json({ limit: "2mb" }));
 app.set('trust proxy', 1);
@@ -135,10 +136,15 @@ authRouter.post("/register", authLimiter, async (req, res, next) => {
         }
 
         const user = await User.create({ name, email, password, role: "guest" });
-        const token = signToken(user);
-        const { _id, name: userName, email: userEmail, role, createdAt } = user;
+        const token = signToken({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role
+        });
+        // const { _id, name: userName, email: userEmail, role, createdAt } = user;
 
-        res.status(201).json({ token, user: { _id, name: userName, email: userEmail, role, createdAt } });
+        // res.status(201).json({ token, user: { _id, name: userName, email: userEmail, role, createdAt } });
     } catch (err) {
         next(err);
     }
@@ -162,7 +168,12 @@ authRouter.post("/login", authLimiter, async (req, res, next) => {
             return res.status(401).json({ message: "Invalid email or password." });
         }
 
-        const token = signToken(user);
+        const token = signToken({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role
+        });
 
         // Return ONLY the token. No user object.
         res.json({ token });
@@ -221,6 +232,7 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
     try {
         // 1. Safely grab the ID, whether your auth middleware uses '_id' or 'id'
         const loggedInUserId = req.user?._id || req.user?.id;
+        console.log(loggedInUserId)
 
         // 2. Ensure we actually have a logged-in user ID to compare against
         if (!loggedInUserId) {
@@ -254,6 +266,8 @@ const NAV_PAGES = [
     { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
     { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
     { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
+    { key: "plus-size", label: "Plus Size Options", path: "/plus-size", icon: "TrendingUp" },
+    { key: "application-guide", label: "Application Guide", path: "/application-guide", icon: "Search" },
     { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
 ];
 const ALL_PAGE_KEYS = NAV_PAGES.map((p) => p.key);
@@ -264,7 +278,7 @@ const DEFAULTS = {
     key: "global",
     matrix: {
         admin: ALL_PAGE_KEYS,
-        staff: ["dashboard", "tire-comparison", "tire-options", "vehicle-notes"],
+        staff: ["dashboard", "tire-comparison", "tire-options", "plus-size", "application-guide", "vehicle-notes"],
         guest: ["dashboard", "tire-comparison"],
     }
 };
@@ -272,6 +286,18 @@ const DEFAULTS = {
 const getOrCreatePermissions = async () => {
     let doc = await Permission.findOne({ key: "global" });
     if (!doc) doc = await Permission.create(DEFAULTS);
+
+    // Admin must always be able to reach every page — including ones added
+    // in a later deploy, like Plus Size / Application Guide here — without
+    // requiring someone to manually re-save the permissions matrix first.
+    // Staff/guest are intentionally left as an admin last configured them:
+    // a new feature page should not silently become visible to non-admin
+    // roles just because it shipped.
+    if (JSON.stringify(doc.matrix.get("admin") || []) !== JSON.stringify(ALL_PAGE_KEYS)) {
+        doc.matrix.set("admin", ALL_PAGE_KEYS);
+        await doc.save();
+    }
+
     return doc;
 };
 
@@ -389,6 +415,70 @@ tireOptionRouter.delete("/:id", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// --- Plus Size Recommendation Routes (Tab 2) ---
+// Searches the same TireOption library used by the Tire Options page
+// ("single data used everywhere") for sizes whose overall height and tread
+// width both fall within tolerance of the OE (original equipment) size the
+// user entered — see utils/tireMath.js for the formulas and .env for the
+// tolerance config.
+const plusSizeRouter = express.Router();
+plusSizeRouter.use(requireAuth, requirePermission("plus-size"));
+
+const PLUS_SIZE_HEIGHT_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_HEIGHT_TOLERANCE_PCT) || 0.03;
+const PLUS_SIZE_TREAD_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_TREAD_TOLERANCE_PCT) || 0.15;
+
+plusSizeRouter.post("/search", async (req, res, next) => {
+    try {
+        const { width, aspect, rim, targetRim } = req.body;
+        const oe = { width: Number(width), aspect: Number(aspect), rim: Number(rim) };
+        if (!oe.width || !oe.aspect || !oe.rim) {
+            return res.status(400).json({ message: "OE width, aspect and rim are required." });
+        }
+
+        const oeHeight = tireOverallHeightInches(oe);
+        const oeTread = tireTreadWidthInches(oe);
+
+        // Step 1: candidate pool — optionally narrowed to a target wheel
+        // diameter (the rim size the shop is plus/minus-sizing into).
+        const query = {};
+        if (targetRim) query.rim = Number(targetRim);
+        const candidates = await TireOption.find(query).lean();
+
+        const results = candidates
+            .map((c) => {
+                const height = tireOverallHeightInches(c);
+                const tread = tireTreadWidthInches(c);
+                const heightDiffPct = ((height - oeHeight) / oeHeight) * 100;
+                const treadDiffPct = ((tread - oeTread) / oeTread) * 100;
+                return {
+                    _id: c._id,
+                    label: c.label,
+                    width: c.width,
+                    aspect: c.aspect,
+                    rim: c.rim,
+                    overallHeightIn: Number(height.toFixed(3)),
+                    treadWidthIn: Number(tread.toFixed(3)),
+                    heightDiffPct: Number(heightDiffPct.toFixed(3)),
+                    treadDiffPct: Number(treadDiffPct.toFixed(3)),
+                };
+            })
+            // Step 1 (height) + Step 2 (tread) tolerance filtering
+            .filter(
+                (r) =>
+                    Math.abs(r.heightDiffPct) <= PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100 &&
+                    Math.abs(r.treadDiffPct) <= PLUS_SIZE_TREAD_TOLERANCE_PCT * 100
+            )
+            // Step 3: closest match (smallest height difference) first
+            .sort((a, b) => Math.abs(a.heightDiffPct) - Math.abs(b.heightDiffPct));
+
+        res.json({
+            oe: { ...oe, overallHeightIn: Number(oeHeight.toFixed(3)), treadWidthIn: Number(oeTread.toFixed(3)) },
+            tolerances: { heightPct: PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100, treadPct: PLUS_SIZE_TREAD_TOLERANCE_PCT * 100 },
+            results,
+        });
+    } catch (err) { next(err); }
+});
+
 // --- Dashboard Routes ---
 const dashboardRouter = express.Router();
 dashboardRouter.use(requireAuth, requirePermission("dashboard"));
@@ -474,7 +564,7 @@ navigationRouter.get("/", (req, res, next) => {
 // cached in Redis for APP_GUIDE_CACHE_TTL_SECONDS and only re-hits Mongo on
 // a cache miss or after a re-import invalidates the "app-guide:" prefix.
 const appGuideRouter = express.Router();
-appGuideRouter.use(requireAuth);
+appGuideRouter.use(requireAuth, requirePermission("application-guide"));
 const APP_GUIDE_CACHE_TTL_SECONDS = Number(process.env.APP_GUIDE_CACHE_TTL_SECONDS) || 3600;
 
 appGuideRouter.get("/years", async (req, res, next) => {
@@ -555,6 +645,7 @@ app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
 app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/tire-options", tireOptionRouter);
+app.use("/plus-size", plusSizeRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/roles", roleRouter);
 app.use("/app-guide", appGuideRouter);
