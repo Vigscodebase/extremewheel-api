@@ -19,12 +19,14 @@ import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import Role from "./models/Role.js";
 import AppGuide from "./models/AppGuide.js";
+import RecentActivity from "./models/RecentActivity.js";
 
 // Middleware
 import { requireAuth, requirePermission } from "./middleware/auth.js";
 import { signToken } from "./utils/jwt.js";
-import { cached } from "./config/redis.js";
+import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
+import { parseCsv, toCsv } from "./utils/csv.js";
 
 dotenv.config({ debug: true });
 
@@ -264,11 +266,14 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
 const NAV_PAGES = [
     { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
     { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
+    { key: "tire-calculator", label: "Tire Size Calculator", path: "/tire-calculator", icon: "Calculator" },
     { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
     { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
     { key: "plus-size", label: "Plus Size Options", path: "/plus-size", icon: "TrendingUp" },
-    { key: "application-guide", label: "Application Guide", path: "/application-guide", icon: "Search" },
+    // { key: "application-guide", label: "Application Guide", path: "/application-guide", icon: "Search" },
+    { key: "tech-data", label: "Tech Data", path: "/tech-data", icon: "Wrench" },
     { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
+    { key: "reports", label: "Reporting & Data Export", path: "/reports", icon: "FileBarChart" },
 ];
 const ALL_PAGE_KEYS = NAV_PAGES.map((p) => p.key);
 
@@ -278,8 +283,18 @@ const DEFAULTS = {
     key: "global",
     matrix: {
         admin: ALL_PAGE_KEYS,
-        staff: ["dashboard", "tire-comparison", "tire-options", "plus-size", "application-guide", "vehicle-notes"],
-        guest: ["dashboard", "tire-comparison"],
+        staff: [
+            "dashboard",
+            "tire-calculator",
+            "tire-comparison",
+            "tire-options",
+            "plus-size",
+            "application-guide",
+            "tech-data",
+            "vehicle-notes",
+            "reports",
+        ],
+        guest: ["dashboard", "tire-calculator", "tire-comparison"],
     }
 };
 
@@ -304,7 +319,8 @@ const getOrCreatePermissions = async () => {
 permissionRouter.get("/", requireAuth, async (req, res, next) => {
     try {
         const doc = await getOrCreatePermissions();
-        res.json({ permissions: Object.fromEntries(doc.matrix) });
+        // Fixed: Use .toJSON() to safely convert the Mongoose Map into a standard JS object
+        res.json({ permissions: doc.matrix.toJSON() });
     } catch (err) { next(err); }
 });
 
@@ -325,7 +341,8 @@ permissionRouter.put("/", requireAuth, requirePermission("user-management"), asy
 
         await doc.save();
 
-        res.json({ permissions: Object.fromEntries(doc.matrix) });
+        // Fixed: Safely return the updated Mongoose Map here as well
+        res.json({ permissions: doc.matrix.toJSON() });
     } catch (err) { next(err); }
 });
 
@@ -342,21 +359,70 @@ vehicleNoteRouter.get("/", requireAuth, async (req, res, next) => {
 
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes } = req.body;
         if (!name || !type || !model) {
             return res.status(400).json({ message: "Name, type and model are required." });
         }
-        const vehicle = await VehicleNote.create({ name, type, model, image, createdBy: req.user._id });
+        const vehicle = await VehicleNote.create({
+            name,
+            type,
+            model,
+            image,
+            beforeImage,
+            afterImage,
+            gallery: Array.isArray(gallery) ? gallery : [],
+            offsetNotes,
+            createdBy: req.user._id,
+        });
         res.status(201).json({ vehicle });
     } catch (err) { next(err); }
 });
 
 vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes } = req.body;
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
-            { ...(name && { name }), ...(type && { type }), ...(model && { model }), ...(image !== undefined && { image }) },
+            {
+                ...(name && { name }),
+                ...(type && { type }),
+                ...(model && { model }),
+                ...(image !== undefined && { image }),
+                ...(beforeImage !== undefined && { beforeImage }),
+                ...(afterImage !== undefined && { afterImage }),
+                ...(Array.isArray(gallery) && { gallery }),
+                ...(offsetNotes !== undefined && { offsetNotes }),
+            },
+            { new: true }
+        );
+        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+        res.json({ vehicle });
+    } catch (err) { next(err); }
+});
+
+// Append/remove a single gallery photo without re-sending the whole
+// vehicle payload — used by the gallery upload widget on Vehicle Notes.
+vehicleNoteRouter.post("/:id/gallery", requireAuth, async (req, res, next) => {
+    try {
+        const { image } = req.body;
+        if (!image) return res.status(400).json({ message: "image is required." });
+        const vehicle = await VehicleNote.findByIdAndUpdate(
+            req.params.id,
+            { $push: { gallery: image } },
+            { new: true }
+        );
+        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+        res.json({ vehicle });
+    } catch (err) { next(err); }
+});
+
+vehicleNoteRouter.delete("/:id/gallery", requireAuth, async (req, res, next) => {
+    try {
+        const { image } = req.body;
+        if (!image) return res.status(400).json({ message: "image is required." });
+        const vehicle = await VehicleNote.findByIdAndUpdate(
+            req.params.id,
+            { $pull: { gallery: image } },
             { new: true }
         );
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
@@ -373,9 +439,13 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
 });
 
 // --- Tire Options Routes ---
+// --- Tire Options Routes ---
 const tireOptionRouter = express.Router();
-tireOptionRouter.use(requireAuth, requirePermission("tire-options"));
 
+// 1. Remove the global permission lock so guests can fetch the dropdown data
+// tireOptionRouter.use(requireAuth, requirePermission("tire-options")); 
+
+// 2. Allow ANY authenticated user to READ the presets (used by the tire-comparison dropdown)
 tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     try {
         const options = await TireOption.find().sort({ createdAt: -1 });
@@ -383,7 +453,8 @@ tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.post("/", requireAuth, async (req, res, next) => {
+// 3. Explicitly lock CREATE, UPDATE, and DELETE behind the "tire-options" permission
+tireOptionRouter.post("/", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
     try {
         const { label, width, aspect, rim } = req.body;
         if (!label || !width || !aspect || !rim) {
@@ -394,7 +465,7 @@ tireOptionRouter.post("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.put("/:id", requireAuth, async (req, res, next) => {
+tireOptionRouter.put("/:id", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
     try {
         const { label, width, aspect, rim } = req.body;
         const option = await TireOption.findByIdAndUpdate(
@@ -407,7 +478,7 @@ tireOptionRouter.put("/:id", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.delete("/:id", requireAuth, async (req, res, next) => {
+tireOptionRouter.delete("/:id", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
     try {
         const option = await TireOption.findByIdAndDelete(req.params.id);
         if (!option) return res.status(404).json({ message: "Preset not found." });
@@ -479,18 +550,83 @@ plusSizeRouter.post("/search", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// --- Recent Activity Routes ---
+// Backs the Dashboard's "Recent tire comparisons" / "Recently searched
+// vehicles" blocks and the Reporting & Data Export page. Any authenticated
+// user can log an activity of their own; reads are scoped to "recent N"
+// only (full history/date-range querying lives on the Reporting page).
+const activityRouter = express.Router();
+activityRouter.use(requireAuth);
+
+activityRouter.post("/tire-comparison", async (req, res, next) => {
+    try {
+        const { tireA, tireB, diffPct, summary } = req.body;
+        if (!tireA || !tireB) {
+            return res.status(400).json({ message: "tireA and tireB are required." });
+        }
+        const activity = await RecentActivity.create({
+            type: "tire-comparison",
+            data: { tireA, tireB, diffPct },
+            summary: summary || `${tireA.width}/${tireA.aspect}R${tireA.rim} vs ${tireB.width}/${tireB.aspect}R${tireB.rim}`,
+            createdBy: req.user._id,
+        });
+        res.status(201).json({ activity });
+    } catch (err) { next(err); }
+});
+
+activityRouter.post("/vehicle-search", async (req, res, next) => {
+    try {
+        const { year, make, model, type, option, summary } = req.body;
+        if (!year || !make || !model) {
+            return res.status(400).json({ message: "year, make and model are required." });
+        }
+        const activity = await RecentActivity.create({
+            type: "vehicle-search",
+            data: { year, make, model, type, option },
+            summary: summary || `${year} ${make} ${model}${type ? ` — ${type}` : ""}`,
+            createdBy: req.user._id,
+        });
+        res.status(201).json({ activity });
+    } catch (err) { next(err); }
+});
+
+activityRouter.get("/recent", async (req, res, next) => {
+    try {
+        const limit = Math.min(Number(req.query.limit) || 5, 20);
+        const [tireComparisons, vehicleSearches] = await Promise.all([
+            RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(limit).lean(),
+            RecentActivity.find({ type: "vehicle-search" }).sort({ createdAt: -1 }).limit(limit).lean(),
+        ]);
+        res.json({ tireComparisons, vehicleSearches });
+    } catch (err) { next(err); }
+});
+
 // --- Dashboard Routes ---
 const dashboardRouter = express.Router();
 dashboardRouter.use(requireAuth, requirePermission("dashboard"));
 
 dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
     try {
-        const [totalUsers, totalVehicles, tirePresets, roleAgg, recentVehicles] = await Promise.all([
+        const [
+            totalUsers,
+            totalVehicles,
+            tirePresets,
+            roleAgg,
+            recentVehicles,
+            recentTireComparisons,
+            recentVehicleSearches,
+            reportsTotal,
+            reportsLast7Days,
+        ] = await Promise.all([
             User.countDocuments(),
             VehicleNote.countDocuments(),
             TireOption.countDocuments(),
             User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
             VehicleNote.find().sort({ createdAt: -1 }).limit(5).select("name type model"),
+            RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(5).lean(),
+            RecentActivity.find({ type: "vehicle-search" }).sort({ createdAt: -1 }).limit(5).lean(),
+            RecentActivity.countDocuments(),
+            RecentActivity.countDocuments({ createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }),
         ]);
 
         const usersByRole = { admin: 0, staff: 0, guest: 0 };
@@ -500,7 +636,16 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             }
         });
 
-        res.json({ totalUsers, totalVehicles, tirePresets, usersByRole, recentVehicles });
+        res.json({
+            totalUsers,
+            totalVehicles,
+            tirePresets,
+            usersByRole,
+            recentVehicles,
+            recentTireComparisons,
+            recentVehicleSearches,
+            reportsSummary: { totalActivity: reportsTotal, last7Days: reportsLast7Days },
+        });
     } catch (err) { next(err); }
 });
 
@@ -564,7 +709,24 @@ navigationRouter.get("/", (req, res, next) => {
 // cached in Redis for APP_GUIDE_CACHE_TTL_SECONDS and only re-hits Mongo on
 // a cache miss or after a re-import invalidates the "app-guide:" prefix.
 const appGuideRouter = express.Router();
-appGuideRouter.use(requireAuth, requirePermission("application-guide"));
+appGuideRouter.use(requireAuth);
+// Both the Application Guide (Tab 3) and Tech Data (Tab 5) pages share these
+// cascading lookup endpoints, so allow either page permission through
+// rather than hard-requiring "application-guide" specifically.
+const requireAppGuideOrTechData = async (req, res, next) => {
+    try {
+        if (req.user?.role === "admin") return next();
+        const doc = await Permission.findOne({ key: "global" }).lean();
+        const allowed = doc?.matrix?.[req.user.role] || [];
+        if (allowed.includes("application-guide") || allowed.includes("tech-data")) {
+            return next();
+        }
+        return res.status(403).json({
+            message: `Access Denied: Your assigned role (${req.user.role}) lacks clearance for 'application-guide' or 'tech-data'.`,
+        });
+    } catch (err) { next(err); }
+};
+appGuideRouter.use(requireAppGuideOrTechData);
 const APP_GUIDE_CACHE_TTL_SECONDS = Number(process.env.APP_GUIDE_CACHE_TTL_SECONDS) || 3600;
 
 appGuideRouter.get("/years", async (req, res, next) => {
@@ -639,6 +801,199 @@ appGuideRouter.get("/fitment", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// --- Tech Data CSV import/export ---
+// A deliberately trimmed-down column set (vs. the ~40-column source xlsx)
+// covering exactly what the Tech Data page displays: fitment + wheel
+// offset. Export and import share the same column list so a downloaded
+// CSV can be edited and re-uploaded as-is.
+const TECH_DATA_CSV_COLUMNS = [
+    { key: "txtYear", label: "Year" },
+    { key: "txtMake", label: "Make" },
+    { key: "txtModel", label: "Model" },
+    { key: "txtType", label: "Type" },
+    { key: "txtOption", label: "Option" },
+    { key: "txtTireSize", label: "Tire Size" },
+    { key: "txtOptTireSize", label: "Optional Tire Size" },
+    { key: "txtBolt", label: "Bolt Pattern" },
+    { key: "txtLug", label: "Lug" },
+    { key: "txtHub", label: "Hub Bore" },
+    { key: "txtOffset", label: "Offset" },
+    { key: "minOffset", label: "Min Offset" },
+    { key: "maxOffset", label: "Max Offset" },
+    { key: "minOffsetRear", label: "Min Offset Rear" },
+    { key: "maxOffsetRear", label: "Max Offset Rear" },
+    { key: "wheelCode", label: "Wheel Code" },
+    { key: "bigBrake", label: "Big Brake" },
+];
+
+appGuideRouter.get("/export", async (req, res, next) => {
+    try {
+        const { year, make, model } = req.query;
+        const query = {};
+        if (year) query.txtYear = year;
+        if (make) query.txtMake = make;
+        if (model) query.txtModel = model;
+
+        // Reasonable safety cap — the full production sheet is ~30k rows;
+        // narrow with year/make/model query params for a scoped export.
+        const rows = await AppGuide.find(query).limit(20000).lean();
+        const csv = toCsv(TECH_DATA_CSV_COLUMNS, rows);
+
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="tech-data-export-${Date.now()}.csv"`);
+        res.send(csv);
+    } catch (err) { next(err); }
+});
+
+appGuideRouter.post("/import", async (req, res, next) => {
+    try {
+        const { csv } = req.body;
+        if (!csv || typeof csv !== "string") {
+            return res.status(400).json({ message: "csv (raw CSV text) is required." });
+        }
+
+        const labelToKey = Object.fromEntries(TECH_DATA_CSV_COLUMNS.map((c) => [c.label, c.key]));
+        const rows = parseCsv(csv);
+
+        let processed = 0;
+        let skipped = 0;
+        const batch = [];
+
+        for (const row of rows) {
+            const doc = {};
+            for (const [label, value] of Object.entries(row)) {
+                const key = labelToKey[label.trim()];
+                if (!key) continue;
+                if (value === "" || value === undefined || value === null) continue;
+                doc[key] = value.trim();
+            }
+
+            if (!doc.txtYear || !doc.txtMake || !doc.txtModel || !doc.txtType) {
+                skipped++;
+                continue;
+            }
+
+            batch.push({
+                updateOne: {
+                    filter: {
+                        txtYear: doc.txtYear,
+                        txtMake: doc.txtMake,
+                        txtModel: doc.txtModel,
+                        txtType: doc.txtType,
+                        txtOption: doc.txtOption || "",
+                    },
+                    update: { $set: doc },
+                    upsert: true,
+                },
+            });
+            processed++;
+        }
+
+        if (batch.length) {
+            await AppGuide.bulkWrite(batch, { ordered: false });
+            await invalidatePrefix("app-guide:");
+        }
+
+        res.json({ processed, skipped, total: rows.length });
+    } catch (err) { next(err); }
+});
+
+
+// --- Reporting & Data Export Routes ---
+// Date-range aware summary + CSV export across the activity log, vehicle
+// notes and tire presets. `from`/`to` are ISO date strings (yyyy-mm-dd);
+// both are optional — omit either for an open-ended range.
+const reportsRouter = express.Router();
+reportsRouter.use(requireAuth, requirePermission("reports"));
+
+const parseDateRange = (req) => {
+    const { from, to } = req.query;
+    const range = {};
+    if (from) range.$gte = new Date(from);
+    if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999); // inclusive of the whole "to" day
+        range.$lte = end;
+    }
+    return Object.keys(range).length ? range : null;
+};
+
+reportsRouter.get("/summary", async (req, res, next) => {
+    try {
+        const range = parseDateRange(req);
+        const createdAtFilter = range ? { createdAt: range } : {};
+
+        const [vehiclesAdded, tireComparisons, vehicleSearches, tirePresetsAdded] = await Promise.all([
+            VehicleNote.countDocuments(createdAtFilter),
+            RecentActivity.countDocuments({ type: "tire-comparison", ...createdAtFilter }),
+            RecentActivity.countDocuments({ type: "vehicle-search", ...createdAtFilter }),
+            TireOption.countDocuments(createdAtFilter),
+        ]);
+
+        res.json({
+            range: { from: req.query.from || null, to: req.query.to || null },
+            vehiclesAdded,
+            tireComparisons,
+            vehicleSearches,
+            tirePresetsAdded,
+        });
+    } catch (err) { next(err); }
+});
+
+const REPORT_EXPORTERS = {
+    vehicles: {
+        columns: [
+            { key: "name", label: "Name" },
+            { key: "type", label: "Type" },
+            { key: "model", label: "Model" },
+            { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
+        ],
+        fetch: (filter) => VehicleNote.find(filter).sort({ createdAt: -1 }).lean(),
+    },
+    "tire-comparisons": {
+        columns: [
+            { key: "summary", label: "Comparison" },
+            { key: (r) => r.data?.diffPct ?? "", label: "Speedo Diff %" },
+            { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
+        ],
+        fetch: (filter) => RecentActivity.find({ type: "tire-comparison", ...filter }).sort({ createdAt: -1 }).lean(),
+    },
+    "vehicle-searches": {
+        columns: [
+            { key: "summary", label: "Vehicle Search" },
+            { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
+        ],
+        fetch: (filter) => RecentActivity.find({ type: "vehicle-search", ...filter }).sort({ createdAt: -1 }).lean(),
+    },
+    "tire-options": {
+        columns: [
+            { key: "label", label: "Preset" },
+            { key: "width", label: "Width" },
+            { key: "aspect", label: "Aspect" },
+            { key: "rim", label: "Rim" },
+            { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
+        ],
+        fetch: (filter) => TireOption.find(filter).sort({ createdAt: -1 }).lean(),
+    },
+};
+
+reportsRouter.get("/export", async (req, res, next) => {
+    try {
+        const { type } = req.query;
+        const exporter = REPORT_EXPORTERS[type];
+        if (!exporter) {
+            return res.status(400).json({ message: `Unknown report type. Use one of: ${Object.keys(REPORT_EXPORTERS).join(", ")}` });
+        }
+
+        const range = parseDateRange(req);
+        const rows = await exporter.fetch(range ? { createdAt: range } : {});
+        const csv = toCsv(exporter.columns, rows);
+
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="${type}-report-${Date.now()}.csv"`);
+        res.send(csv);
+    } catch (err) { next(err); }
+});
 
 app.use("/auth", authRouter);
 app.use("/users", userRouter);
@@ -647,6 +1002,8 @@ app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/plus-size", plusSizeRouter);
 app.use("/dashboard", dashboardRouter);
+app.use("/activity", activityRouter);
+app.use("/reports", reportsRouter);
 app.use("/roles", roleRouter);
 app.use("/app-guide", appGuideRouter);
 app.use("/navigation", navigationRouter);
@@ -658,7 +1015,6 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 initializeApp()
-
     .then(() => {
         app.listen(PORT, () => {
             console.log(`[server] The extremewheel api server is running on port ${PORT}`);
