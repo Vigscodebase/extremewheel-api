@@ -1378,3 +1378,277 @@
 [2026-07-20T00:55:23.959Z] [API] END   GET /permissions - 401 (2ms)
 [2026-07-20T00:55:23.996Z] [API] START GET /auth/me
 [2026-07-20T00:55:23.998Z] [API] END   GET /auth/me - 401 (2ms)
+[2026-07-20T01:27:25.558Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T01:27:25.571Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T01:27:25.600Z] [DB] ✅ User unique indexes verified/created
+[2026-07-20T01:28:04.221Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T01:28:04.248Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T01:46:48.416Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T01:46:48.431Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T01:46:48.465Z] [DB] ✅ User unique indexes verified/created
+[2026-07-20T01:46:59.745Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T01:46:59.779Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T01:47:35.872Z] [API] START POST /auth/login
+[2026-07-20T01:47:36.030Z] [API] END   POST /auth/login - 200 (158ms)
+[2026-07-20T01:47:36.522Z] [API] START GET /tire-options
+[2026-07-20T01:47:36.530Z] [API] END   GET /tire-options - 304 (8ms)
+[2026-07-20T01:47:36.554Z] [API] START GET /permissions
+[2026-07-20T01:47:36.562Z] [API] END   GET /permissions - 200 (8ms)
+[2026-07-20T01:47:54.224Z] [API] START GET /tire-options
+[2026-07-20T01:47:54.228Z] [API] END   GET /tire-options - 304 (4ms)
+[2026-07-20T01:47:56.791Z] [API] START GET /permissions
+[2026-07-20T01:47:56.796Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-20T01:48:17.021Z] [API] START GET /permissions
+[2026-07-20T01:48:17.026Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-20T01:48:31.185Z] [API] START GET /tire-options
+[2026-07-20T01:48:31.190Z] [API] END   GET /tire-options - 304 (5ms)
+[2026-07-20T01:48:37.263Z] [API] START GET /permissions
+[2026-07-20T01:48:37.269Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-20T01:48:49.469Z] [API] START GET /dashboard/summary
+[2026-07-20T01:48:49.501Z] [API] END   GET /dashboard/summary - 200 (32ms)
+[2026-07-20T01:48:57.495Z] [API] START GET /permissions
+[2026-07-20T01:48:57.501Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-20T04:20:00.564Z] [API] START POST /auth/login
+[2026-07-20T04:20:00.678Z] [API] END   POST /auth/login - 200 (114ms)
+[2026-07-20T04:20:01.226Z] [API] START GET /dashboard/summary
+[2026-07-20T04:20:01.243Z] [API] START GET /permissions
+[2026-07-20T04:20:01.249Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-20T04:20:01.258Z] [API] END   GET /dashboard/summary - 304 (32ms)
+[2026-07-20T05:21:08.592Z] [API] START POST /auth/login
+[2026-07-20T05:21:08.716Z] [API] END   POST /auth/login - 200 (124ms)
+[2026-07-20T05:21:09.211Z] [API] START GET /dashboard/summary
+[2026-07-20T05:21:09.224Z] [API] END   GET /dashboard/summary - 304 (13ms)
+[2026-07-20T05:21:09.245Z] [API] START GET /permissions
+[2026-07-20T05:21:09.249Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T05:21:15.997Z] [API] START GET /tire-options
+[2026-07-20T05:21:16.002Z] [API] END   GET /tire-options - 304 (5ms)
+[2026-07-20T05:21:29.478Z] [API] START GET /permissions
+[2026-07-20T05:21:29.482Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T06:46:53.504Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-20T06:46:53.506Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (2ms)
+[2026-07-20T07:08:02.900Z] [API] START GET /permissions
+[2026-07-20T07:08:02.902Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-20T07:08:18.637Z] [API] START POST /auth/login
+[2026-07-20T07:08:18.752Z] [API] END   POST /auth/login - 200 (115ms)
+[2026-07-20T07:08:19.192Z] [API] START GET /tire-options
+[2026-07-20T07:08:19.197Z] [API] END   GET /tire-options - 200 (5ms)
+[2026-07-20T07:08:19.268Z] [API] START GET /permissions
+[2026-07-20T07:08:19.272Z] [API] END   GET /permissions - 200 (4ms)
+[2026-07-20T07:08:39.524Z] [API] START GET /permissions
+[2026-07-20T07:08:39.527Z] [API] END   GET /permissions - 304 (3ms)
+[2026-07-20T07:08:59.747Z] [API] START GET /permissions
+[2026-07-20T07:08:59.751Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T07:09:19.966Z] [API] START GET /permissions
+[2026-07-20T07:09:19.970Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T07:09:40.190Z] [API] START GET /permissions
+[2026-07-20T07:09:40.194Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T07:32:13.441Z] [API] START GET /permissions
+[2026-07-20T07:32:13.443Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-20T07:46:08.380Z] [API] START GET /.env
+[2026-07-20T07:46:08.381Z] [API] END   GET /.env - 404 (1ms)
+[2026-07-20T09:12:33.388Z] [API] START GET /status
+[2026-07-20T09:12:33.390Z] [API] END   GET /status - 404 (2ms)
+[2026-07-20T09:12:33.460Z] [API] START GET /overview
+[2026-07-20T09:12:33.462Z] [API] END   GET /overview - 404 (2ms)
+[2026-07-20T09:12:33.473Z] [API] START GET /v1/targets
+[2026-07-20T09:12:33.475Z] [API] END   GET /v1/targets - 404 (2ms)
+[2026-07-20T09:12:33.498Z] [API] START GET /health
+[2026-07-20T09:12:33.499Z] [API] END   GET /health - 200 (1ms)
+[2026-07-20T09:12:33.576Z] [API] START GET /json
+[2026-07-20T09:12:33.577Z] [API] END   GET /json - 404 (1ms)
+[2026-07-20T09:12:33.613Z] [API] START GET /v1/dags
+[2026-07-20T09:12:33.614Z] [API] END   GET /v1/dags - 404 (1ms)
+[2026-07-20T09:12:33.781Z] [API] START GET /v4/projects
+[2026-07-20T09:12:33.782Z] [API] END   GET /v4/projects - 404 (1ms)
+[2026-07-20T09:12:33.963Z] [API] START GET /v1/repos/search
+[2026-07-20T09:12:33.964Z] [API] END   GET /v1/repos/search - 404 (1ms)
+[2026-07-20T09:12:34.026Z] [API] START GET /v2.0/projects
+[2026-07-20T09:12:34.027Z] [API] END   GET /v2.0/projects - 404 (1ms)
+[2026-07-20T09:12:34.057Z] [API] START GET /projects/search
+[2026-07-20T09:12:34.058Z] [API] END   GET /projects/search - 404 (1ms)
+[2026-07-20T09:12:34.064Z] [API] START GET /v1/applications
+[2026-07-20T09:12:34.064Z] [API] END   GET /v1/applications - 404 (0ms)
+[2026-07-20T09:12:34.066Z] [API] START GET /http/routers
+[2026-07-20T09:12:34.067Z] [API] END   GET /http/routers - 404 (1ms)
+[2026-07-20T09:12:42.623Z] [API] START GET /
+[2026-07-20T09:12:42.624Z] [API] END   GET / - 404 (1ms)
+[2026-07-20T10:24:22.652Z] [API] START POST /auth/login
+[2026-07-20T10:24:22.766Z] [API] END   POST /auth/login - 200 (114ms)
+[2026-07-20T10:24:23.286Z] [API] START GET /tire-options
+[2026-07-20T10:24:23.290Z] [API] END   GET /tire-options - 304 (4ms)
+[2026-07-20T10:24:23.296Z] [API] START GET /permissions
+[2026-07-20T10:24:23.300Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T10:24:24.792Z] [API] START GET /reports/summary?from=2026-06-20&to=2026-07-20
+[2026-07-20T10:24:24.802Z] [API] END   GET /reports/summary?from=2026-06-20&to=2026-07-20 - 200 (10ms)
+[2026-07-20T10:24:38.497Z] [API] START GET /app-guide/years
+[2026-07-20T10:24:38.527Z] [API] END   GET /app-guide/years - 200 (30ms)
+[2026-07-20T10:24:43.604Z] [API] START GET /permissions
+[2026-07-20T10:24:43.607Z] [API] END   GET /permissions - 304 (3ms)
+[2026-07-20T10:24:52.649Z] [API] START GET /reports/summary?from=2026-06-20&to=2026-07-20
+[2026-07-20T10:24:52.655Z] [API] END   GET /reports/summary?from=2026-06-20&to=2026-07-20 - 304 (6ms)
+[2026-07-20T12:14:39.048Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T12:14:39.061Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T12:14:39.091Z] [DB] ✅ User unique indexes verified/created
+[2026-07-20T12:14:53.215Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-20T12:14:53.242Z] [DB] ✅ Connected -> extremewheel
+[2026-07-20T12:36:44.240Z] [API] START POST /auth/login
+[2026-07-20T12:36:44.446Z] [API] END   POST /auth/login - 200 (206ms)
+[2026-07-20T12:36:44.743Z] [API] START GET /reports/summary?from=2026-06-20&to=2026-07-20
+[2026-07-20T12:36:44.757Z] [API] END   GET /reports/summary?from=2026-06-20&to=2026-07-20 - 200 (14ms)
+[2026-07-20T12:36:44.772Z] [API] START GET /permissions
+[2026-07-20T12:36:44.779Z] [API] END   GET /permissions - 200 (7ms)
+[2026-07-20T12:36:51.190Z] [API] START GET /permissions
+[2026-07-20T12:36:51.193Z] [API] END   GET /permissions - 401 (3ms)
+[2026-07-20T12:36:51.195Z] [API] START GET /auth/me
+[2026-07-20T12:36:51.198Z] [API] END   GET /auth/me - 200 (3ms)
+[2026-07-20T12:36:51.478Z] [API] START GET /reports/summary?from=2026-06-20&to=2026-07-20
+[2026-07-20T12:36:51.491Z] [API] END   GET /reports/summary?from=2026-06-20&to=2026-07-20 - 304 (13ms)
+[2026-07-20T12:36:55.197Z] [API] START GET /permissions
+[2026-07-20T12:36:55.199Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-20T12:36:55.204Z] [API] START GET /auth/me
+[2026-07-20T12:36:55.206Z] [API] END   GET /auth/me - 200 (2ms)
+[2026-07-20T12:36:55.592Z] [API] START GET /reports/summary?from=2026-06-20&to=2026-07-20
+[2026-07-20T12:36:55.606Z] [API] END   GET /reports/summary?from=2026-06-20&to=2026-07-20 - 304 (14ms)
+[2026-07-20T12:37:00.081Z] [API] START GET /tire-options
+[2026-07-20T12:37:00.086Z] [API] END   GET /tire-options - 200 (5ms)
+[2026-07-20T12:37:07.717Z] [API] START GET /auth/me
+[2026-07-20T12:37:07.721Z] [API] END   GET /auth/me - 200 (4ms)
+[2026-07-20T12:37:07.723Z] [API] START GET /permissions
+[2026-07-20T12:37:07.724Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-20T12:37:07.990Z] [API] START GET /tire-options
+[2026-07-20T12:37:07.995Z] [API] END   GET /tire-options - 304 (5ms)
+[2026-07-20T12:37:10.269Z] [API] START GET /dashboard/summary
+[2026-07-20T12:37:10.299Z] [API] END   GET /dashboard/summary - 200 (30ms)
+[2026-07-20T12:37:28.015Z] [API] START GET /permissions
+[2026-07-20T12:37:28.019Z] [API] END   GET /permissions - 200 (4ms)
+[2026-07-20T12:37:32.601Z] [API] START GET /permissions
+[2026-07-20T12:37:32.602Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-20T12:37:32.608Z] [API] START GET /auth/me
+[2026-07-20T12:37:32.609Z] [API] END   GET /auth/me - 200 (1ms)
+[2026-07-20T12:37:33.100Z] [API] START GET /dashboard/summary
+[2026-07-20T12:37:33.120Z] [API] END   GET /dashboard/summary - 304 (20ms)
+[2026-07-20T12:37:52.818Z] [API] START GET /permissions
+[2026-07-20T12:37:52.822Z] [API] END   GET /permissions - 200 (4ms)
+[2026-07-20T12:38:53.057Z] [API] START GET /permissions
+[2026-07-20T12:38:53.061Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T12:39:13.273Z] [API] START GET /permissions
+[2026-07-20T12:39:13.281Z] [API] END   GET /permissions - 304 (8ms)
+[2026-07-20T12:39:33.387Z] [API] START GET /dashboard/summary
+[2026-07-20T12:39:33.406Z] [API] END   GET /dashboard/summary - 304 (19ms)
+[2026-07-20T12:39:33.598Z] [API] START GET /permissions
+[2026-07-20T12:39:33.603Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-20T12:39:53.813Z] [API] START GET /permissions
+[2026-07-20T12:39:53.818Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-20T12:40:14.020Z] [API] START GET /permissions
+[2026-07-20T12:40:14.026Z] [API] END   GET /permissions - 304 (6ms)
+[2026-07-20T12:40:33.618Z] [API] START GET /dashboard/summary
+[2026-07-20T12:40:33.635Z] [API] END   GET /dashboard/summary - 304 (17ms)
+[2026-07-20T12:40:34.241Z] [API] START GET /permissions
+[2026-07-20T12:40:34.246Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-20T12:40:54.460Z] [API] START GET /permissions
+[2026-07-20T12:40:54.464Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T12:41:14.670Z] [API] START GET /permissions
+[2026-07-20T12:41:14.674Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-20T12:41:54.346Z] [API] START GET /tire-options
+[2026-07-20T12:41:54.352Z] [API] END   GET /tire-options - 304 (6ms)
+[2026-07-20T12:41:54.878Z] [API] START GET /permissions
+[2026-07-20T12:41:54.881Z] [API] END   GET /permissions - 304 (3ms)
+[2026-07-20T13:21:25.991Z] [API] START GET /permissions
+[2026-07-20T13:21:25.993Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-20T22:39:16.556Z] [API] START GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+[2026-07-20T22:39:16.557Z] [API] END   GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php - 404 (1ms)
+[2026-07-20T23:08:17.093Z] [API] START GET /.env
+[2026-07-20T23:08:17.094Z] [API] END   GET /.env - 404 (1ms)
+[2026-07-21T04:39:03.931Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-21T04:39:03.944Z] [DB] ✅ Connected -> extremewheel
+[2026-07-21T04:39:03.975Z] [DB] ✅ User unique indexes verified/created
+[2026-07-21T04:40:24.772Z] [API] START POST /auth/login
+[2026-07-21T04:40:24.962Z] [API] END   POST /auth/login - 200 (190ms)
+[2026-07-21T04:40:25.461Z] [API] START GET /tire-options
+[2026-07-21T04:40:25.469Z] [API] END   GET /tire-options - 304 (8ms)
+[2026-07-21T04:40:25.493Z] [API] START GET /permissions
+[2026-07-21T04:40:25.500Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-21T04:40:45.771Z] [API] START GET /permissions
+[2026-07-21T04:40:45.773Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-21T04:41:05.107Z] [API] START GET /permissions
+[2026-07-21T04:41:05.109Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-21T04:41:05.118Z] [API] START GET /auth/me
+[2026-07-21T04:41:05.120Z] [API] END   GET /auth/me - 401 (2ms)
+[2026-07-21T04:43:34.040Z] [Redis] ✅ Connected -> redis://127.0.0.1:6379
+[2026-07-21T04:43:34.068Z] [DB] ✅ Connected -> extremewheel
+[2026-07-21T04:44:36.592Z] [API] START POST /auth/login
+[2026-07-21T04:44:36.708Z] [API] END   POST /auth/login - 200 (116ms)
+[2026-07-21T04:44:37.056Z] [API] START GET /tire-options
+[2026-07-21T04:44:37.060Z] [API] END   GET /tire-options - 304 (4ms)
+[2026-07-21T04:44:37.064Z] [API] START GET /permissions
+[2026-07-21T04:44:37.070Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-21T04:44:58.162Z] [API] START GET /permissions
+[2026-07-21T04:44:58.164Z] [API] END   GET /permissions - 401 (2ms)
+[2026-07-21T04:44:58.207Z] [API] START GET /auth/me
+[2026-07-21T04:44:58.209Z] [API] END   GET /auth/me - 401 (2ms)
+[2026-07-21T04:45:12.684Z] [API] START POST /auth/login
+[2026-07-21T04:45:12.831Z] [API] END   POST /auth/login - 200 (147ms)
+[2026-07-21T04:45:13.134Z] [API] START GET /tire-options
+[2026-07-21T04:45:13.138Z] [API] END   GET /tire-options - 304 (4ms)
+[2026-07-21T04:45:13.142Z] [API] START GET /permissions
+[2026-07-21T04:45:13.147Z] [API] END   GET /permissions - 200 (5ms)
+[2026-07-21T04:45:20.343Z] [API] START POST /activity/tire-comparison
+[2026-07-21T04:45:20.345Z] [API] END   POST /activity/tire-comparison - 401 (2ms)
+[2026-07-21T04:45:43.816Z] [API] START GET /permissions
+[2026-07-21T04:45:43.817Z] [API] END   GET /permissions - 401 (1ms)
+[2026-07-21T04:45:55.445Z] [API] START POST /auth/login
+[2026-07-21T04:45:55.584Z] [API] END   POST /auth/login - 200 (139ms)
+[2026-07-21T04:45:56.077Z] [API] START GET /dashboard/summary
+[2026-07-21T04:45:56.106Z] [API] END   GET /dashboard/summary - 200 (29ms)
+[2026-07-21T04:45:56.108Z] [API] START GET /permissions
+[2026-07-21T04:45:56.113Z] [API] END   GET /permissions - 200 (5ms)
+[2026-07-21T04:46:16.339Z] [API] START GET /permissions
+[2026-07-21T04:46:16.345Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-21T04:46:18.263Z] [API] START GET /tire-options
+[2026-07-21T04:46:18.268Z] [API] END   GET /tire-options - 200 (5ms)
+[2026-07-21T04:46:36.561Z] [API] START GET /permissions
+[2026-07-21T04:46:36.566Z] [API] END   GET /permissions - 200 (5ms)
+[2026-07-21T04:46:50.775Z] [API] START GET /reports/summary?from=2026-06-21&to=2026-07-21
+[2026-07-21T04:46:50.784Z] [API] END   GET /reports/summary?from=2026-06-21&to=2026-07-21 - 200 (9ms)
+[2026-07-21T04:46:56.802Z] [API] START GET /permissions
+[2026-07-21T04:46:56.807Z] [API] END   GET /permissions - 200 (5ms)
+[2026-07-21T04:46:59.463Z] [API] START GET /vehicle-notes
+[2026-07-21T04:46:59.467Z] [API] END   GET /vehicle-notes - 200 (4ms)
+[2026-07-21T04:47:02.383Z] [API] START GET /app-guide/years
+[2026-07-21T04:47:02.418Z] [API] END   GET /app-guide/years - 200 (35ms)
+[2026-07-21T04:47:17.045Z] [API] START GET /permissions
+[2026-07-21T04:47:17.051Z] [API] END   GET /permissions - 200 (6ms)
+[2026-07-21T04:47:19.113Z] [API] START GET /tire-options
+[2026-07-21T04:47:19.117Z] [API] END   GET /tire-options - 200 (4ms)
+[2026-07-21T04:47:37.319Z] [API] START GET /permissions
+[2026-07-21T04:47:37.324Z] [API] END   GET /permissions - 200 (5ms)
+[2026-07-21T04:47:57.638Z] [API] START GET /permissions
+[2026-07-21T04:47:57.642Z] [API] END   GET /permissions - 200 (4ms)
+[2026-07-21T04:48:17.897Z] [API] START GET /permissions
+[2026-07-21T04:48:17.901Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:48:38.158Z] [API] START GET /permissions
+[2026-07-21T04:48:38.162Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:48:58.463Z] [API] START GET /permissions
+[2026-07-21T04:48:58.468Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-21T04:49:18.709Z] [API] START GET /permissions
+[2026-07-21T04:49:18.713Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:49:38.931Z] [API] START GET /permissions
+[2026-07-21T04:49:38.935Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:49:59.342Z] [API] START GET /permissions
+[2026-07-21T04:49:59.347Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-21T04:50:19.640Z] [API] START GET /permissions
+[2026-07-21T04:50:19.645Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-21T04:50:29.254Z] [API] START GET /tire-options
+[2026-07-21T04:50:29.257Z] [API] END   GET /tire-options - 200 (3ms)
+[2026-07-21T04:50:39.880Z] [API] START GET /permissions
+[2026-07-21T04:50:39.884Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:51:00.142Z] [API] START GET /permissions
+[2026-07-21T04:51:00.149Z] [API] END   GET /permissions - 304 (7ms)
+[2026-07-21T04:51:20.377Z] [API] START GET /permissions
+[2026-07-21T04:51:20.382Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-21T04:51:40.825Z] [API] START GET /permissions
+[2026-07-21T04:51:40.830Z] [API] END   GET /permissions - 304 (5ms)
+[2026-07-21T04:52:01.141Z] [API] START GET /permissions
+[2026-07-21T04:52:01.145Z] [API] END   GET /permissions - 304 (4ms)
+[2026-07-21T04:52:22.354Z] [API] START GET /permissions
+[2026-07-21T04:52:22.357Z] [API] END   GET /permissions - 304 (3ms)
