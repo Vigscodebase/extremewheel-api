@@ -144,9 +144,6 @@ authRouter.post("/register", authLimiter, async (req, res, next) => {
             email: user.email,
             role: user.role
         });
-        // const { _id, name: userName, email: userEmail, role, createdAt } = user;
-
-        // res.status(201).json({ token, user: { _id, name: userName, email: userEmail, role, createdAt } });
     } catch (err) {
         next(err);
     }
@@ -178,6 +175,24 @@ authRouter.post("/login", authLimiter, async (req, res, next) => {
         });
 
         // Return ONLY the token. No user object.
+        res.json({ token });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// --- NEW SILENT REFRESH ENDPOINT ---
+authRouter.post("/refresh", requireAuth, async (req, res, next) => {
+    try {
+        // Because requireAuth succeeded, the current token is valid. 
+        // We simply issue a fresh one to extend their session.
+        const token = signToken({
+            _id: req.user._id,
+            name: req.user.name,
+            email: req.user.email,
+            role: req.user.role
+        });
+
         res.json({ token });
     } catch (err) {
         next(err);
@@ -232,16 +247,13 @@ userRouter.put("/:id", requireAuth, async (req, res, next) => {
 
 userRouter.delete("/:id", requireAuth, async (req, res, next) => {
     try {
-        // 1. Safely grab the ID, whether your auth middleware uses '_id' or 'id'
         const loggedInUserId = req.user?._id || req.user?.id;
         console.log(loggedInUserId)
 
-        // 2. Ensure we actually have a logged-in user ID to compare against
         if (!loggedInUserId) {
             return res.status(401).json({ message: "Authentication required or user data malformed." });
         }
 
-        // 3. Compare safely
         if (req.params.id === loggedInUserId.toString()) {
             return res.status(400).json({ message: "You can't delete your own account while signed in." });
         }
@@ -259,10 +271,6 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
 });
 
 // --- Shared page/navigation registry ---
-// Single source of truth for every page key + its nav metadata, used by both
-// the permissions matrix (below) and the /navigation router. Previously this
-// list was duplicated in two places and could drift out of sync; now it's
-// defined once and derived everywhere else.
 const NAV_PAGES = [
     { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
     { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
@@ -270,7 +278,6 @@ const NAV_PAGES = [
     { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
     { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
     { key: "plus-size", label: "Plus Size Options", path: "/plus-size", icon: "TrendingUp" },
-    // { key: "application-guide", label: "Application Guide", path: "/application-guide", icon: "Search" },
     { key: "tech-data", label: "Tech Data", path: "/tech-data", icon: "Wrench" },
     { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
     { key: "reports", label: "Reporting & Data Export", path: "/reports", icon: "FileBarChart" },
@@ -302,12 +309,6 @@ const getOrCreatePermissions = async () => {
     let doc = await Permission.findOne({ key: "global" });
     if (!doc) doc = await Permission.create(DEFAULTS);
 
-    // Admin must always be able to reach every page — including ones added
-    // in a later deploy, like Plus Size / Application Guide here — without
-    // requiring someone to manually re-save the permissions matrix first.
-    // Staff/guest are intentionally left as an admin last configured them:
-    // a new feature page should not silently become visible to non-admin
-    // roles just because it shipped.
     if (JSON.stringify(doc.matrix.get("admin") || []) !== JSON.stringify(ALL_PAGE_KEYS)) {
         doc.matrix.set("admin", ALL_PAGE_KEYS);
         await doc.save();
@@ -319,7 +320,6 @@ const getOrCreatePermissions = async () => {
 permissionRouter.get("/", requireAuth, async (req, res, next) => {
     try {
         const doc = await getOrCreatePermissions();
-        // Fixed: Use .toJSON() to safely convert the Mongoose Map into a standard JS object
         res.json({ permissions: doc.matrix.toJSON() });
     } catch (err) { next(err); }
 });
@@ -341,7 +341,6 @@ permissionRouter.put("/", requireAuth, requirePermission("user-management"), asy
 
         await doc.save();
 
-        // Fixed: Safely return the updated Mongoose Map here as well
         res.json({ permissions: doc.matrix.toJSON() });
     } catch (err) { next(err); }
 });
@@ -400,8 +399,6 @@ vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// Append/remove a single gallery photo without re-sending the whole
-// vehicle payload — used by the gallery upload widget on Vehicle Notes.
 vehicleNoteRouter.post("/:id/gallery", requireAuth, async (req, res, next) => {
     try {
         const { image } = req.body;
@@ -439,13 +436,8 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
 });
 
 // --- Tire Options Routes ---
-// --- Tire Options Routes ---
 const tireOptionRouter = express.Router();
 
-// 1. Remove the global permission lock so guests can fetch the dropdown data
-// tireOptionRouter.use(requireAuth, requirePermission("tire-options")); 
-
-// 2. Allow ANY authenticated user to READ the presets (used by the tire-comparison dropdown)
 tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     try {
         const options = await TireOption.find().sort({ createdAt: -1 });
@@ -453,7 +445,6 @@ tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// 3. Explicitly lock CREATE, UPDATE, and DELETE behind the "tire-options" permission
 tireOptionRouter.post("/", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
     try {
         const { label, width, aspect, rim } = req.body;
@@ -486,12 +477,7 @@ tireOptionRouter.delete("/:id", requireAuth, requirePermission("tire-options"), 
     } catch (err) { next(err); }
 });
 
-// --- Plus Size Recommendation Routes (Tab 2) ---
-// Searches the same TireOption library used by the Tire Options page
-// ("single data used everywhere") for sizes whose overall height and tread
-// width both fall within tolerance of the OE (original equipment) size the
-// user entered — see utils/tireMath.js for the formulas and .env for the
-// tolerance config.
+// --- Plus Size Recommendation Routes ---
 const plusSizeRouter = express.Router();
 plusSizeRouter.use(requireAuth, requirePermission("plus-size"));
 
@@ -509,8 +495,6 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         const oeHeight = tireOverallHeightInches(oe);
         const oeTread = tireTreadWidthInches(oe);
 
-        // Step 1: candidate pool — optionally narrowed to a target wheel
-        // diameter (the rim size the shop is plus/minus-sizing into).
         const query = {};
         if (targetRim) query.rim = Number(targetRim);
         const candidates = await TireOption.find(query).lean();
@@ -533,13 +517,11 @@ plusSizeRouter.post("/search", async (req, res, next) => {
                     treadDiffPct: Number(treadDiffPct.toFixed(3)),
                 };
             })
-            // Step 1 (height) + Step 2 (tread) tolerance filtering
             .filter(
                 (r) =>
                     Math.abs(r.heightDiffPct) <= PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100 &&
                     Math.abs(r.treadDiffPct) <= PLUS_SIZE_TREAD_TOLERANCE_PCT * 100
             )
-            // Step 3: closest match (smallest height difference) first
             .sort((a, b) => Math.abs(a.heightDiffPct) - Math.abs(b.heightDiffPct));
 
         res.json({
@@ -551,10 +533,6 @@ plusSizeRouter.post("/search", async (req, res, next) => {
 });
 
 // --- Recent Activity Routes ---
-// Backs the Dashboard's "Recent tire comparisons" / "Recently searched
-// vehicles" blocks and the Reporting & Data Export page. Any authenticated
-// user can log an activity of their own; reads are scoped to "recent N"
-// only (full history/date-range querying lives on the Reporting page).
 const activityRouter = express.Router();
 activityRouter.use(requireAuth);
 
@@ -694,25 +672,16 @@ navigationRouter.use(requireAuth);
 
 navigationRouter.get("/", (req, res, next) => {
     try {
-        // Served from the single NAV_PAGES registry above. Move this to a DB
-        // collection later (admin-editable menus) without touching callers —
-        // the response shape stays the same.
         res.json({ nav: NAV_PAGES });
     } catch (err) {
         next(err);
     }
 });
 
-// --- Application Guide Routes (Tab 3 cascading lookup + Tab 5 tech data) ---
-// Read-heavy, rarely-changing reference data imported from the client's
-// tblAppGuide xlsx (see scripts/importAppGuide.js), so every list here is
-// cached in Redis for APP_GUIDE_CACHE_TTL_SECONDS and only re-hits Mongo on
-// a cache miss or after a re-import invalidates the "app-guide:" prefix.
+// --- Application Guide Routes ---
 const appGuideRouter = express.Router();
 appGuideRouter.use(requireAuth);
-// Both the Application Guide (Tab 3) and Tech Data (Tab 5) pages share these
-// cascading lookup endpoints, so allow either page permission through
-// rather than hard-requiring "application-guide" specifically.
+
 const requireAppGuideOrTechData = async (req, res, next) => {
     try {
         if (req.user?.role === "admin") return next();
@@ -782,8 +751,6 @@ appGuideRouter.get("/types", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// Full fitment + wheel-offset record for the final Year/Make/Model/Type
-// selection — this is what Tab 5's tech data / offset chart renders.
 appGuideRouter.get("/fitment", async (req, res, next) => {
     try {
         const { year, make, model, type, option } = req.query;
@@ -801,11 +768,6 @@ appGuideRouter.get("/fitment", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// --- Tech Data CSV import/export ---
-// A deliberately trimmed-down column set (vs. the ~40-column source xlsx)
-// covering exactly what the Tech Data page displays: fitment + wheel
-// offset. Export and import share the same column list so a downloaded
-// CSV can be edited and re-uploaded as-is.
 const TECH_DATA_CSV_COLUMNS = [
     { key: "txtYear", label: "Year" },
     { key: "txtMake", label: "Make" },
@@ -834,8 +796,6 @@ appGuideRouter.get("/export", async (req, res, next) => {
         if (make) query.txtMake = make;
         if (model) query.txtModel = model;
 
-        // Reasonable safety cap — the full production sheet is ~30k rows;
-        // narrow with year/make/model query params for a scoped export.
         const rows = await AppGuide.find(query).limit(20000).lean();
         const csv = toCsv(TECH_DATA_CSV_COLUMNS, rows);
 
@@ -898,11 +858,7 @@ appGuideRouter.post("/import", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-
 // --- Reporting & Data Export Routes ---
-// Date-range aware summary + CSV export across the activity log, vehicle
-// notes and tire presets. `from`/`to` are ISO date strings (yyyy-mm-dd);
-// both are optional — omit either for an open-ended range.
 const reportsRouter = express.Router();
 reportsRouter.use(requireAuth, requirePermission("reports"));
 
@@ -912,7 +868,7 @@ const parseDateRange = (req) => {
     if (from) range.$gte = new Date(from);
     if (to) {
         const end = new Date(to);
-        end.setHours(23, 59, 59, 999); // inclusive of the whole "to" day
+        end.setHours(23, 59, 59, 999);
         range.$lte = end;
     }
     return Object.keys(range).length ? range : null;
