@@ -51,7 +51,7 @@ if (corsOrigins.length > 0) {
     app.use(cors({ origin: corsOrigins, credentials: true, exposedHeaders: ["x-refresh-token"] }));
 }
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.set('trust proxy', 1);
 
 // General API-wide rate limit (defense in depth alongside the stricter
