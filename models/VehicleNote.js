@@ -40,6 +40,24 @@ const vehicleNoteSchema = new Schema(
       default: "", // Free-text wheel offset / fitment reference notes, surfaced on the Tech Data page
       trim: true,
     },
+    // "Existing" (before) engine + tyre specification
+    existingSpec: {
+      engine: { type: String, default: "", trim: true },
+      tyre: {
+        width: { type: Number },
+        aspect: { type: Number },
+        rim: { type: Number },
+      },
+    },
+    // "Upgraded" (after) engine + tyre specification
+    upgradedSpec: {
+      engine: { type: String, default: "", trim: true },
+      tyre: {
+        width: { type: Number },
+        aspect: { type: Number },
+        rim: { type: Number },
+      },
+    },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User",

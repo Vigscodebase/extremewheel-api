@@ -14,7 +14,7 @@ const recentActivitySchema = new Schema(
   {
     type: {
       type: String,
-      enum: ["tire-comparison", "vehicle-search"],
+      enum: ["tire-comparison", "vehicle-search", "plus-size"],
       required: true,
       index: true,
     },

@@ -356,9 +356,24 @@ vehicleNoteRouter.get("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// Normalizes the existing/upgraded engine + tyre spec payload so partial
+// input (e.g. engine only, no tyre numbers yet) never crashes the write.
+function normalizeSpec(spec) {
+    if (!spec || typeof spec !== "object") return undefined;
+    const tyre = spec.tyre && typeof spec.tyre === "object" ? spec.tyre : {};
+    return {
+        engine: typeof spec.engine === "string" ? spec.engine : "",
+        tyre: {
+            width: tyre.width !== undefined && tyre.width !== "" ? Number(tyre.width) : undefined,
+            aspect: tyre.aspect !== undefined && tyre.aspect !== "" ? Number(tyre.aspect) : undefined,
+            rim: tyre.rim !== undefined && tyre.rim !== "" ? Number(tyre.rim) : undefined,
+        },
+    };
+}
+
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec } = req.body;
         if (!name || !type || !model) {
             return res.status(400).json({ message: "Name, type and model are required." });
         }
@@ -371,6 +386,8 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
             afterImage,
             gallery: Array.isArray(gallery) ? gallery : [],
             offsetNotes,
+            existingSpec: normalizeSpec(existingSpec),
+            upgradedSpec: normalizeSpec(upgradedSpec),
             createdBy: req.user._id,
         });
         res.status(201).json({ vehicle });
@@ -379,7 +396,7 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
 
 vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec } = req.body;
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             {
@@ -391,6 +408,8 @@ vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
                 ...(afterImage !== undefined && { afterImage }),
                 ...(Array.isArray(gallery) && { gallery }),
                 ...(offsetNotes !== undefined && { offsetNotes }),
+                ...(existingSpec !== undefined && { existingSpec: normalizeSpec(existingSpec) }),
+                ...(upgradedSpec !== undefined && { upgradedSpec: normalizeSpec(upgradedSpec) }),
             },
             { new: true }
         );
@@ -532,6 +551,24 @@ plusSizeRouter.post("/search", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+plusSizeRouter.post("/save", async (req, res, next) => {
+    try {
+        const { oe, match, tolerances, summary } = req.body;
+        if (!oe || !match) {
+            return res.status(400).json({ message: "oe and match are required." });
+        }
+        const activity = await RecentActivity.create({
+            type: "plus-size",
+            data: { oe, match, tolerances },
+            summary:
+                summary ||
+                `${oe.width}/${oe.aspect}R${oe.rim} → ${match.width}/${match.aspect}R${match.rim} (${match.label || "plus-size match"})`,
+            createdBy: req.user._id,
+        });
+        res.status(201).json({ activity });
+    } catch (err) { next(err); }
+});
+
 // --- Recent Activity Routes ---
 const activityRouter = express.Router();
 activityRouter.use(requireAuth);
@@ -571,11 +608,62 @@ activityRouter.post("/vehicle-search", async (req, res, next) => {
 activityRouter.get("/recent", async (req, res, next) => {
     try {
         const limit = Math.min(Number(req.query.limit) || 5, 20);
-        const [tireComparisons, vehicleSearches] = await Promise.all([
+        const [tireComparisons, vehicleSearches, plusSizeSaves] = await Promise.all([
             RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(limit).lean(),
             RecentActivity.find({ type: "vehicle-search" }).sort({ createdAt: -1 }).limit(limit).lean(),
+            RecentActivity.find({ type: "plus-size" }).sort({ createdAt: -1 }).limit(limit).lean(),
         ]);
-        res.json({ tireComparisons, vehicleSearches });
+        res.json({ tireComparisons, vehicleSearches, plusSizeSaves });
+    } catch (err) { next(err); }
+});
+
+// Cross-feature "did you already save something like this?" lookup, used by
+// the Tire Size Calculator / Comparison / Option / Plus Size pages to
+// surface matching saved presets, past comparisons and vehicle notes
+// (with before/after photos + existing/upgraded engine & tyre spec) right
+// under a freshly computed result.
+activityRouter.get("/suggestions", async (req, res, next) => {
+    try {
+        const width = Number(req.query.width);
+        const aspect = Number(req.query.aspect);
+        const rim = Number(req.query.rim);
+        if (!width || !aspect || !rim) {
+            return res.status(400).json({ message: "width, aspect and rim are required." });
+        }
+
+        const [presets, comparisons, plusSizeSaves, vehicles] = await Promise.all([
+            TireOption.find({ width, aspect, rim }).limit(6).lean(),
+            RecentActivity.find({
+                type: "tire-comparison",
+                $or: [
+                    { "data.tireA.width": width, "data.tireA.aspect": aspect, "data.tireA.rim": rim },
+                    { "data.tireB.width": width, "data.tireB.aspect": aspect, "data.tireB.rim": rim },
+                ],
+            })
+                .sort({ createdAt: -1 })
+                .limit(6)
+                .lean(),
+            RecentActivity.find({
+                type: "plus-size",
+                $or: [
+                    { "data.oe.width": width, "data.oe.aspect": aspect, "data.oe.rim": rim },
+                    { "data.match.width": width, "data.match.aspect": aspect, "data.match.rim": rim },
+                ],
+            })
+                .sort({ createdAt: -1 })
+                .limit(6)
+                .lean(),
+            VehicleNote.find({
+                $or: [
+                    { "existingSpec.tyre.width": width, "existingSpec.tyre.aspect": aspect, "existingSpec.tyre.rim": rim },
+                    { "upgradedSpec.tyre.width": width, "upgradedSpec.tyre.aspect": aspect, "upgradedSpec.tyre.rim": rim },
+                ],
+            })
+                .limit(6)
+                .lean(),
+        ]);
+
+        res.json({ presets, comparisons, plusSizeSaves, vehicles });
     } catch (err) { next(err); }
 });
 
@@ -593,6 +681,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             recentVehicles,
             recentTireComparisons,
             recentVehicleSearches,
+            recentPlusSizeSaves,
             reportsTotal,
             reportsLast7Days,
         ] = await Promise.all([
@@ -603,6 +692,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             VehicleNote.find().sort({ createdAt: -1 }).limit(5).select("name type model"),
             RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(5).lean(),
             RecentActivity.find({ type: "vehicle-search" }).sort({ createdAt: -1 }).limit(5).lean(),
+            RecentActivity.find({ type: "plus-size" }).sort({ createdAt: -1 }).limit(5).lean(),
             RecentActivity.countDocuments(),
             RecentActivity.countDocuments({ createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }),
         ]);
@@ -622,6 +712,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             recentVehicles,
             recentTireComparisons,
             recentVehicleSearches,
+            recentPlusSizeSaves,
             reportsSummary: { totalActivity: reportsTotal, last7Days: reportsLast7Days },
         });
     } catch (err) { next(err); }
