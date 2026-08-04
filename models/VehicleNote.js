@@ -58,6 +58,28 @@ const vehicleNoteSchema = new Schema(
         rim: { type: Number },
       },
     },
+    // Date tracking — the real-world date the work/entry relates to (service
+    // date, install date, inspection date, ...), distinct from createdAt /
+    // updatedAt which just track when the *record* was saved.
+    eventDate: {
+      type: Date,
+    },
+    // Internal staff notes and comments — part of the "content management"
+    // layer for Vehicle Notes. Never shown to guest-level users on the
+    // client; staff/admin only. Append-only from the UI (edits create a new
+    // entry rather than mutating history), each one time-stamped and
+    // attributed to the staff member who wrote it.
+    staffNotes: {
+      type: [
+        {
+          text: { type: String, required: true, trim: true },
+          authorName: { type: String, trim: true, default: "" },
+          author: { type: Schema.Types.ObjectId, ref: "User" },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User",

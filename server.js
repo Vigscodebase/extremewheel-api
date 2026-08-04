@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import helmet from "helmet";
 import compression from "compression";
+import crypto from "crypto";
 
 import logToFile from "./logger.js";
 import connectDB from "./config/db.js";
@@ -144,9 +145,98 @@ authRouter.post("/register", authLimiter, async (req, res, next) => {
             email: user.email,
             role: user.role
         });
+        res.status(201).json({ token });
     } catch (err) {
         next(err);
     }
+});
+
+// --- Forgot password ---
+// Issues a short-lived, single-use reset token. Only a hash of the token is
+// stored on the user document; the raw token only ever exists in the email
+// link (or, if no SMTP transport is configured, in the server log) so it
+// can't be replayed from a database dump alone.
+const RESET_TOKEN_EXPIRES_MS = Number(process.env.RESET_PASSWORD_EXPIRES_MS) || 60 * 60 * 1000; // 1 hour
+const hashResetToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
+
+authRouter.post("/forgot-password", authLimiter, async (req, res, next) => {
+    try {
+        const { email } = req.body;
+        if (!email || !EMAIL_RE.test(email)) {
+            return res.status(400).json({ message: "Enter a valid email address." });
+        }
+
+        const user = await User.findOne({ email: email.toLowerCase() });
+        // Always return the same response whether or not the account exists,
+        // so this endpoint can't be used to enumerate registered emails.
+        if (user) {
+            const rawToken = crypto.randomBytes(32).toString("hex");
+            user.resetPasswordTokenHash = hashResetToken(rawToken);
+            user.resetPasswordExpires = new Date(Date.now() + RESET_TOKEN_EXPIRES_MS);
+            await user.save();
+
+            const resetUrl = `${process.env.CLIENT_APP_URL || ""}/reset-password?token=${rawToken}&email=${encodeURIComponent(user.email)}`;
+
+            if (process.env.SMTP_HOST) {
+                try {
+                    const nodemailer = await import("nodemailer");
+                    const transporter = nodemailer.default.createTransport({
+                        host: process.env.SMTP_HOST,
+                        port: Number(process.env.SMTP_PORT) || 587,
+                        secure: process.env.SMTP_SECURE === "true",
+                        auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+                    });
+                    await transporter.sendMail({
+                        from: process.env.SMTP_FROM || "no-reply@extremewheel.app",
+                        to: user.email,
+                        subject: "Reset your ExtremeWheel password",
+                        text: `Reset your password: ${resetUrl}\n\nThis link expires in ${Math.round(RESET_TOKEN_EXPIRES_MS / 60000)} minutes. If you didn't request this, you can ignore this email.`,
+                    });
+                } catch (mailErr) {
+                    // Never let an email-transport failure block the response or
+                    // leak whether the account exists; just log it server-side.
+                    console.error("[forgot-password] email send failed:", mailErr.message);
+                    logToFile?.(`[forgot-password] email send failed for ${user.email}: ${mailErr.message}`);
+                }
+            } else {
+                // Dev/staff fallback with no SMTP configured — the link is
+                // logged server-side rather than silently dropped.
+                console.log(`[forgot-password] SMTP not configured. Reset link for ${user.email}: ${resetUrl}`);
+            }
+        }
+
+        res.json({ message: "If an account exists for that email, a reset link has been sent." });
+    } catch (err) { next(err); }
+});
+
+authRouter.post("/reset-password", authLimiter, async (req, res, next) => {
+    try {
+        const { email, token, password } = req.body;
+        if (!email || !token || !password) {
+            return res.status(400).json({ message: "Email, token and new password are required." });
+        }
+        if (password.length < 8) {
+            return res.status(400).json({ message: "Password must be at least 8 characters." });
+        }
+
+        const user = await User.findOne({ email: email.toLowerCase() }).select("+resetPasswordTokenHash +resetPasswordExpires");
+        if (!user || !user.resetPasswordTokenHash || !user.resetPasswordExpires) {
+            return res.status(400).json({ message: "This reset link is invalid or has expired." });
+        }
+        if (user.resetPasswordExpires.getTime() < Date.now()) {
+            return res.status(400).json({ message: "This reset link is invalid or has expired." });
+        }
+        if (hashResetToken(token) !== user.resetPasswordTokenHash) {
+            return res.status(400).json({ message: "This reset link is invalid or has expired." });
+        }
+
+        user.password = password; // re-hashed by the pre-save hook
+        user.resetPasswordTokenHash = undefined;
+        user.resetPasswordExpires = undefined;
+        await user.save();
+
+        res.json({ message: "Password updated. You can now sign in." });
+    } catch (err) { next(err); }
 });
 
 authRouter.post("/login", authLimiter, async (req, res, next) => {
@@ -373,7 +463,7 @@ function normalizeSpec(spec) {
 
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
         if (!name || !type || !model) {
             return res.status(400).json({ message: "Name, type and model are required." });
         }
@@ -388,6 +478,7 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
             offsetNotes,
             existingSpec: normalizeSpec(existingSpec),
             upgradedSpec: normalizeSpec(upgradedSpec),
+            eventDate: eventDate ? new Date(eventDate) : undefined,
             createdBy: req.user._id,
         });
         res.status(201).json({ vehicle });
@@ -396,7 +487,7 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
 
 vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             {
@@ -410,7 +501,56 @@ vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
                 ...(offsetNotes !== undefined && { offsetNotes }),
                 ...(existingSpec !== undefined && { existingSpec: normalizeSpec(existingSpec) }),
                 ...(upgradedSpec !== undefined && { upgradedSpec: normalizeSpec(upgradedSpec) }),
+                ...(eventDate !== undefined && { eventDate: eventDate ? new Date(eventDate) : null }),
             },
+            { new: true }
+        );
+        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+        res.json({ vehicle });
+    } catch (err) { next(err); }
+});
+
+// --- Internal staff notes & comments ---
+// Part of the internal content-management layer for Vehicle Notes: any
+// authenticated staff/admin user with vehicle-notes access can leave a
+// timestamped, attributed note. Guests can reach this router at all only if
+// granted the "vehicle-notes" permission, but as a defense-in-depth measure
+// staff notes are additionally blocked for the "guest" role outright.
+const requireStaffOrAdmin = (req, res, next) => {
+    if (req.user.role === "guest") {
+        return res.status(403).json({ message: "Internal staff notes are restricted to staff and admin accounts." });
+    }
+    next();
+};
+
+vehicleNoteRouter.post("/:id/notes", requireStaffOrAdmin, async (req, res, next) => {
+    try {
+        const { text } = req.body;
+        if (!text || !text.trim()) return res.status(400).json({ message: "Note text is required." });
+        const vehicle = await VehicleNote.findByIdAndUpdate(
+            req.params.id,
+            {
+                $push: {
+                    staffNotes: {
+                        text: text.trim(),
+                        authorName: req.user.name || req.user.email,
+                        author: req.user._id,
+                        createdAt: new Date(),
+                    },
+                },
+            },
+            { new: true }
+        );
+        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+        res.status(201).json({ vehicle });
+    } catch (err) { next(err); }
+});
+
+vehicleNoteRouter.delete("/:id/notes/:noteId", requireStaffOrAdmin, async (req, res, next) => {
+    try {
+        const vehicle = await VehicleNote.findByIdAndUpdate(
+            req.params.id,
+            { $pull: { staffNotes: { _id: req.params.noteId } } },
             { new: true }
         );
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
@@ -505,24 +645,51 @@ const PLUS_SIZE_TREAD_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_TREAD_TOLERAN
 
 plusSizeRouter.post("/search", async (req, res, next) => {
     try {
-        const { width, aspect, rim, targetRim } = req.body;
+        const { width, aspect, rim, targetRim, heightTolerancePct, treadTolerancePct, sortBy } = req.body;
         const oe = { width: Number(width), aspect: Number(aspect), rim: Number(rim) };
         if (!oe.width || !oe.aspect || !oe.rim) {
             return res.status(400).json({ message: "OE width, aspect and rim are required." });
         }
 
+        // Client can narrow/widen the tolerance windows per search; falls back
+        // to the server-configured defaults when not supplied.
+        const heightTolPct = Number.isFinite(Number(heightTolerancePct)) && heightTolerancePct !== ""
+            ? Math.max(0, Number(heightTolerancePct))
+            : PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100;
+        const treadTolPct = Number.isFinite(Number(treadTolerancePct)) && treadTolerancePct !== ""
+            ? Math.max(0, Number(treadTolerancePct))
+            : PLUS_SIZE_TREAD_TOLERANCE_PCT * 100;
+
         const oeHeight = tireOverallHeightInches(oe);
         const oeTread = tireTreadWidthInches(oe);
 
-        const query = {};
-        if (targetRim) query.rim = Number(targetRim);
-        const candidates = await TireOption.find(query).lean();
+        // --- Stage 1: matching wheel diameter ---
+        // Filter the tire database down to the requested target rim (wheel
+        // diameter) first. If no target rim was given, every diameter in the
+        // library is a candidate, but this stays the first stage of the
+        // pipeline so a future "search all plus-size-appropriate diameters"
+        // feature can plug in here without touching stages 2/3.
+        const diameterQuery = {};
+        if (targetRim) diameterQuery.rim = Number(targetRim);
+        const diameterMatches = await TireOption.find(diameterQuery).lean();
 
-        const results = candidates
+        // --- Stage 2: falling within the calculated height range ---
+        // Only overall-height is computed/checked here; tread width is
+        // deliberately NOT calculated yet, since it's the more expensive/less
+        // decisive filter and there's no point computing it for a candidate
+        // that's already outside the acceptable height range.
+        const heightMatches = diameterMatches
             .map((c) => {
                 const height = tireOverallHeightInches(c);
-                const tread = tireTreadWidthInches(c);
                 const heightDiffPct = ((height - oeHeight) / oeHeight) * 100;
+                return { candidate: c, height, heightDiffPct };
+            })
+            .filter((c) => Math.abs(c.heightDiffPct) <= heightTolPct);
+
+        // --- Stage 3: tread width, calculated only for height-range survivors ---
+        const withinTolerance = heightMatches
+            .map(({ candidate: c, height, heightDiffPct }) => {
+                const tread = tireTreadWidthInches(c);
                 const treadDiffPct = ((tread - oeTread) / oeTread) * 100;
                 return {
                     _id: c._id,
@@ -536,16 +703,22 @@ plusSizeRouter.post("/search", async (req, res, next) => {
                     treadDiffPct: Number(treadDiffPct.toFixed(3)),
                 };
             })
-            .filter(
-                (r) =>
-                    Math.abs(r.heightDiffPct) <= PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100 &&
-                    Math.abs(r.treadDiffPct) <= PLUS_SIZE_TREAD_TOLERANCE_PCT * 100
-            )
-            .sort((a, b) => Math.abs(a.heightDiffPct) - Math.abs(b.heightDiffPct));
+            .filter((r) => Math.abs(r.treadDiffPct) <= treadTolPct)
+            .map((r) => ({
+                ...r,
+                // Percentage-difference ranking score: combined closeness to OE
+                // across both height and tread, smaller is better.
+                combinedDiffPct: Number((Math.abs(r.heightDiffPct) + Math.abs(r.treadDiffPct)).toFixed(3)),
+            }));
+
+        const sortKey = { height: "heightDiffPct", tread: "treadDiffPct", combined: "combinedDiffPct" }[sortBy] || "combinedDiffPct";
+        withinTolerance.sort((a, b) => Math.abs(a[sortKey]) - Math.abs(b[sortKey]));
+        const results = withinTolerance.map((r, i) => ({ ...r, rank: i + 1 }));
 
         res.json({
             oe: { ...oe, overallHeightIn: Number(oeHeight.toFixed(3)), treadWidthIn: Number(oeTread.toFixed(3)) },
-            tolerances: { heightPct: PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100, treadPct: PLUS_SIZE_TREAD_TOLERANCE_PCT * 100 },
+            tolerances: { heightPct: heightTolPct, treadPct: treadTolPct },
+            sortBy: sortKey,
             results,
         });
     } catch (err) { next(err); }

@@ -32,6 +32,17 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
+  // --- Forgot password ---
+  // Only a SHA-256 hash of the reset token is ever stored (never the raw
+  // token), so a database leak alone can't be used to reset an account.
+  resetPasswordTokenHash: {
+    type: String,
+    select: false,
+  },
+  resetPasswordExpires: {
+    type: Date,
+    select: false,
+  },
 });
 
 // FIXED: Removed the 'next' parameter and the next() calls
