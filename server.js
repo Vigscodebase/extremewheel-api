@@ -463,10 +463,23 @@ function normalizeSpec(spec) {
 
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
+        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes } = req.body;
+
         if (!name || !type || !model) {
             return res.status(400).json({ message: "Name, type and model are required." });
         }
+
+        // Map initial staff notes securely if provided during "Add Vehicle"
+        let mappedNotes = [];
+        if (Array.isArray(staffNotes)) {
+            mappedNotes = staffNotes.map(n => ({
+                text: n.text,
+                authorName: n.authorName || req.user.name || req.user.email,
+                author: req.user._id,
+                createdAt: n.createdAt ? new Date(n.createdAt) : new Date()
+            }));
+        }
+
         const vehicle = await VehicleNote.create({
             name,
             type,
@@ -476,6 +489,7 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
             afterImage,
             gallery: Array.isArray(gallery) ? gallery : [],
             offsetNotes,
+            staffNotes: mappedNotes,
             existingSpec: normalizeSpec(existingSpec),
             upgradedSpec: normalizeSpec(upgradedSpec),
             eventDate: eventDate ? new Date(eventDate) : undefined,
