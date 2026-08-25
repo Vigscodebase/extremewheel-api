@@ -18,6 +18,7 @@ import User from "./models/User.js";
 import Permission from "./models/Permission.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
+import VehicleLookup from "./models/VehicleLookup.js";
 import Role from "./models/Role.js";
 import AppGuide from "./models/AppGuide.js";
 import RecentActivity from "./models/RecentActivity.js";
@@ -28,6 +29,7 @@ import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
+import { importVehicleLookupWorkbook, buildVehicleLookupWorkbook } from "./utils/vehicleLookupImporter.js";
 
 dotenv.config({ debug: true });
 
@@ -463,10 +465,10 @@ function normalizeSpec(spec) {
 
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes } = req.body;
+        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes } = req.body;
 
-        if (!name || !type || !model) {
-            return res.status(400).json({ message: "Name, type and model are required." });
+        if (!name || !make || !model || !type) {
+            return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
         }
 
         // Map initial staff notes securely if provided during "Add Vehicle"
@@ -482,8 +484,10 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
 
         const vehicle = await VehicleNote.create({
             name,
+            make,
             type,
             model,
+            year,
             image,
             beforeImage,
             afterImage,
@@ -501,13 +505,15 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
 
 vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
-        const { name, type, model, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
+        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             {
                 ...(name && { name }),
+                ...(make && { make }),
                 ...(type && { type }),
                 ...(model && { model }),
+                ...(year !== undefined && { year }),
                 ...(image !== undefined && { image }),
                 ...(beforeImage !== undefined && { beforeImage }),
                 ...(afterImage !== undefined && { afterImage }),
@@ -605,6 +611,73 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
         const vehicle = await VehicleNote.findByIdAndDelete(req.params.id);
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
         res.json({ success: true });
+    } catch (err) { next(err); }
+});
+
+// --- Vehicle Lookup Routes (predefined Make/Model/Type dropdown data) ---
+// Backs the cascading Make -> Model -> Type dropdowns on the Vehicle Notes
+// "Add / Edit vehicle" form. Read access matches vehicle-notes; only
+// staff/admin can replace the table via upload (same restriction as the
+// internal staff notes endpoints above), since an upload wipes and
+// re-populates the whole reference table for every user.
+const vehicleLookupRouter = express.Router();
+vehicleLookupRouter.use(requireAuth, requirePermission("vehicle-notes"));
+
+const VEHICLE_LOOKUP_CACHE_TTL_SECONDS = Number(process.env.VEHICLE_LOOKUP_CACHE_TTL_SECONDS) || 3600;
+
+vehicleLookupRouter.get("/makes", async (req, res, next) => {
+    try {
+        const makes = await cached("vehicle-lookup:makes", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
+            VehicleLookup.distinct("make").then((m) => m.filter(Boolean).sort())
+        );
+        res.json({ makes });
+    } catch (err) { next(err); }
+});
+
+vehicleLookupRouter.get("/models", async (req, res, next) => {
+    try {
+        const { make } = req.query;
+        if (!make) return res.status(400).json({ message: "make is required." });
+        const models = await cached(`vehicle-lookup:models:${make}`, VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
+            VehicleLookup.distinct("model", { make }).then((m) => m.filter(Boolean).sort())
+        );
+        res.json({ models });
+    } catch (err) { next(err); }
+});
+
+vehicleLookupRouter.get("/types", async (req, res, next) => {
+    try {
+        const { make, model } = req.query;
+        const query = {};
+        if (make) query.make = make;
+        if (model) query.model = model;
+        const cacheKey = `vehicle-lookup:types:${make || ""}:${model || ""}`;
+        const types = await cached(cacheKey, VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
+            VehicleLookup.distinct("type", query).then((t) => t.filter(Boolean).sort())
+        );
+        res.json({ types });
+    } catch (err) { next(err); }
+});
+
+vehicleLookupRouter.get("/export", async (req, res, next) => {
+    try {
+        const rows = await VehicleLookup.find().sort({ make: 1, model: 1 }).lean();
+        const buffer = buildVehicleLookupWorkbook(rows);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="vehicle-notes-database-${Date.now()}.xlsx"`);
+        res.send(buffer);
+    } catch (err) { next(err); }
+});
+
+vehicleLookupRouter.post("/import", requireStaffOrAdmin, async (req, res, next) => {
+    try {
+        const { fileBase64 } = req.body;
+        if (!fileBase64 || typeof fileBase64 !== "string") {
+            return res.status(400).json({ message: "fileBase64 (the .xlsx file, base64-encoded) is required." });
+        }
+        const buffer = Buffer.from(fileBase64, "base64");
+        const result = await importVehicleLookupWorkbook(buffer);
+        res.json(result);
     } catch (err) { next(err); }
 });
 
@@ -1178,8 +1251,11 @@ const REPORT_EXPORTERS = {
     vehicles: {
         columns: [
             { key: "name", label: "Name" },
-            { key: "type", label: "Type" },
+            { key: "make", label: "Make" },
             { key: "model", label: "Model" },
+            { key: "type", label: "Type" },
+            { key: "year", label: "Year" },
+            { key: (r) => (r.eventDate ? new Date(r.eventDate).toISOString() : ""), label: "Event Date" },
             { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
         ],
         fetch: (filter) => VehicleNote.find(filter).sort({ createdAt: -1 }).lean(),
@@ -1233,6 +1309,7 @@ app.use("/auth", authRouter);
 app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
 app.use("/vehicle-notes", vehicleNoteRouter);
+app.use("/vehicle-lookup", vehicleLookupRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/plus-size", plusSizeRouter);
 app.use("/dashboard", dashboardRouter);

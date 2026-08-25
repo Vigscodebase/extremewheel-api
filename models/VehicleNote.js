@@ -9,6 +9,18 @@ const vehicleNoteSchema = new Schema(
       required: true,
       trim: true,
     },
+    // Vehicle Notes "Add / Edit vehicle" form field order is:
+    // Vehicle Name, Make, Model, Type, Year, Event date.
+    // make/model/type are all drawn from the predefined VehicleLookup
+    // dropdowns (cascading: make -> model -> type); year is a free-entry
+    // vehicle model year, kept distinct from eventDate (the real-world
+    // service/install date used elsewhere in the app).
+    make: {
+      type: String,
+      required: true,
+      trim: true,
+      index: true,
+    },
     type: {
       type: String,
       required: true,
@@ -17,6 +29,10 @@ const vehicleNoteSchema = new Schema(
     model: {
       type: String,
       required: true,
+      trim: true,
+    },
+    year: {
+      type: String,
       trim: true,
     },
     image: {

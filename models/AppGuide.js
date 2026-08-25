@@ -55,10 +55,17 @@ const appGuideSchema = new Schema(
     wheelCode: { type: String, trim: true },
     bigBrake: { type: String, trim: true },
 
-    // Fitment flags per wheel diameter (F17..F30 in the source sheet)
-    fitsByDiameter: {
+    // Upgrade tire size available at each wheel diameter, from the F17..F30
+    // columns in the source sheet. IMPORTANT — despite the column names,
+    // these are NOT sequential 17"-30" flags and they are NOT booleans: per
+    // the client, F17 is the 15" diameter column, so the mapping runs
+    // F17=15", F18=16", F19=17", ... F30=28" (column N -> diameter N-2), and
+    // each cell holds the actual upgrade tire-size string for that diameter
+    // (e.g. "225 45 17"), blank when no upgrade is offered at that size.
+    // Keyed by diameter in inches as a string ("15".."28").
+    upgradeSizeByDiameter: {
       type: Map,
-      of: Boolean,
+      of: String,
       default: undefined,
     },
 

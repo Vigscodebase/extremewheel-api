@@ -53,9 +53,16 @@ const COLUMN_MAP = {
   "speed stag rear": "speedStagRear",
 };
 
-// F17..F30 columns are per-wheel-diameter "does this fitment work on a 17in
-// wheel?" flags — collapsed into a single fitsByDiameter map.
-const DIAMETER_COLUMNS = Array.from({ length: 14 }, (_, i) => `F${17 + i}`);
+// F17..F30 columns hold the upgrade tire size available at each wheel
+// diameter — NOT sequential 17"-30" flags and NOT booleans. Per the client:
+// "F17 is for 15 inch tires", so column FN maps to diameter (N-2) inches,
+// i.e. F17=15", F18=16", F19=17", ... F30=28". Each cell is the actual
+// upgrade tire-size string for that diameter (e.g. "225 45 17"), blank when
+// that diameter isn't offered as an upgrade for the row's base fitment.
+const DIAMETER_COLUMNS = Array.from({ length: 14 }, (_, i) => ({
+  col: `F${17 + i}`,
+  diameter: String(15 + i),
+}));
 
 function rowToDoc(row) {
   const doc = {};
@@ -64,15 +71,16 @@ function rowToDoc(row) {
     doc[field] = typeof row[col] === "string" ? row[col].trim() : row[col];
   }
 
-  const fitsByDiameter = {};
+  const upgradeSizeByDiameter = {};
   let hasAny = false;
-  for (const col of DIAMETER_COLUMNS) {
-    if (row[col] !== undefined && row[col] !== null && row[col] !== "") {
-      fitsByDiameter[col.slice(1)] = Boolean(Number(row[col]) || row[col] === true);
+  for (const { col, diameter } of DIAMETER_COLUMNS) {
+    const raw = row[col];
+    if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+      upgradeSizeByDiameter[diameter] = String(raw).trim();
       hasAny = true;
     }
   }
-  if (hasAny) doc.fitsByDiameter = fitsByDiameter;
+  if (hasAny) doc.upgradeSizeByDiameter = upgradeSizeByDiameter;
 
   return doc;
 }
