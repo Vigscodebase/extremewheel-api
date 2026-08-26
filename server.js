@@ -19,6 +19,7 @@ import Permission from "./models/Permission.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import VehicleLookup from "./models/VehicleLookup.js";
+import VehicleLookupYear from "./models/VehicleLookupYear.js";
 import Role from "./models/Role.js";
 import AppGuide from "./models/AppGuide.js";
 import RecentActivity from "./models/RecentActivity.js";
@@ -29,7 +30,7 @@ import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
-import { importVehicleLookupWorkbook, buildVehicleLookupWorkbook } from "./utils/vehicleLookupImporter.js";
+import { importVehicleLookupWorkbook, buildVehicleLookupWorkbook, quickAddVehicleLookup, quickAddVehicleLookupYear } from "./utils/vehicleLookupImporter.js";
 
 dotenv.config({ debug: true });
 
@@ -365,7 +366,6 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
 // --- Shared page/navigation registry ---
 const NAV_PAGES = [
     { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
-    { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" },
     { key: "tire-calculator", label: "Tire Size Calculator", path: "/tire-calculator", icon: "Calculator" },
     { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
     { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
@@ -373,6 +373,7 @@ const NAV_PAGES = [
     { key: "tech-data", label: "Tech Data", path: "/tech-data", icon: "Wrench" },
     { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
     { key: "reports", label: "Reporting & Data Export", path: "/reports", icon: "FileBarChart" },
+    { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" }
 ];
 const ALL_PAGE_KEYS = NAV_PAGES.map((p) => p.key);
 
@@ -659,6 +660,24 @@ vehicleLookupRouter.get("/types", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// Independent of make/model/type — see models/VehicleLookupYear.js for why.
+// Sorted numerically where possible (plain 4-digit years) and falls back to
+// alphabetical for anything else (e.g. a free-text "2015-2020" range value).
+vehicleLookupRouter.get("/years", async (req, res, next) => {
+    try {
+        const years = await cached("vehicle-lookup:years", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
+            VehicleLookupYear.distinct("year").then((y) =>
+                y.filter(Boolean).sort((a, b) => {
+                    const na = Number(a), nb = Number(b);
+                    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+                    return String(a).localeCompare(String(b));
+                })
+            )
+        );
+        res.json({ years });
+    } catch (err) { next(err); }
+});
+
 vehicleLookupRouter.get("/export", async (req, res, next) => {
     try {
         const rows = await VehicleLookup.find().sort({ make: 1, model: 1 }).lean();
@@ -678,6 +697,35 @@ vehicleLookupRouter.post("/import", requireStaffOrAdmin, async (req, res, next) 
         const buffer = Buffer.from(fileBase64, "base64");
         const result = await importVehicleLookupWorkbook(buffer);
         res.json(result);
+    } catch (err) { next(err); }
+});
+
+// Adds one Make/Model/Type combo to the predefined list — this is what lets
+// anyone filling out the Vehicle Notes form type a brand new value instead
+// of picking from the dropdown, and have it become a real dropdown option
+// from then on. Deliberately open to any authenticated user with vehicle-
+// notes access (not staff/admin-only like /import above): unlike a full
+// sheet re-upload, this only ever adds one row and never removes anything,
+// so it's no riskier than creating the vehicle note itself. Upserts, so
+// submitting an existing combo again is a harmless no-op.
+vehicleLookupRouter.post("/quick-add", async (req, res, next) => {
+    try {
+        const { make, model, type } = req.body;
+        if (!make || !model || !type) {
+            return res.status(400).json({ message: "make, model and type are all required." });
+        }
+        await quickAddVehicleLookup({ make: String(make).trim(), model: String(model).trim(), type: String(type).trim() });
+        res.json({ ok: true });
+    } catch (err) { next(err); }
+});
+
+// Same idea, for the independent Year dropdown.
+vehicleLookupRouter.post("/quick-add-year", async (req, res, next) => {
+    try {
+        const { year } = req.body;
+        if (!year) return res.status(400).json({ message: "year is required." });
+        await quickAddVehicleLookupYear(String(year).trim());
+        res.json({ ok: true });
     } catch (err) { next(err); }
 });
 
