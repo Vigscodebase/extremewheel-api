@@ -1,6 +1,7 @@
 import xlsx from "xlsx";
 import VehicleLookup from "../models/VehicleLookup.js";
 import VehicleLookupYear from "../models/VehicleLookupYear.js";
+import VehicleLookupMake from "../models/VehicleLookupMake.js";
 import { invalidatePrefix } from "../config/redis.js";
 import logToFile from "../logger.js";
 
@@ -189,4 +190,77 @@ export async function quickAddVehicleLookup({ make, model, type }) {
 export async function quickAddVehicleLookupYear(year) {
   await VehicleLookupYear.updateOne({ year }, { $setOnInsert: { year } }, { upsert: true });
   await invalidatePrefix("vehicle-lookup:");
+}
+
+/**
+ * Adds a Make on its own (no Model/Type yet) to the predefined Make list —
+ * used by the Tire Size Option preset popup, where a preset only has a Make.
+ * Upserts, so adding one that already exists is a harmless no-op.
+ */
+export async function addVehicleLookupMake(make) {
+  await VehicleLookupMake.updateOne({ make }, { $setOnInsert: { make } }, { upsert: true });
+  await invalidatePrefix("vehicle-lookup:");
+}
+
+/**
+ * Deleting a Model or Type only ever removes rows *under* a make. If that
+ * would leave the make with no rows at all it would vanish from the Make
+ * dropdown as a side effect, so it's parked in VehicleLookupMake first.
+ */
+async function keepMakeIfEmptied(make, remainingFilter) {
+  const remaining = await VehicleLookup.countDocuments({ make, ...remainingFilter });
+  if (remaining === 0) {
+    await VehicleLookupMake.updateOne({ make }, { $setOnInsert: { make } }, { upsert: true });
+  }
+}
+
+/**
+ * Removes one Year from the predefined Year list. Years are independent of
+ * make/model/type (see models/VehicleLookupYear.js), so there is nothing
+ * cascading to clean up — and, like the Make/Model/Type deletes below,
+ * Vehicle Notes already saved with that year keep it.
+ * Resolves to the number of rows removed (0 means the year wasn't found).
+ */
+export async function deleteVehicleLookupYear(year) {
+  const rows = await VehicleLookupYear.deleteOne({ year });
+  await invalidatePrefix("vehicle-lookup:");
+  return rows.deletedCount;
+}
+
+/**
+ * Removes a Make from the predefined list along with every Model/Type row
+ * under it. Existing Vehicle Notes and Tire Size Option presets are plain
+ * documents that store their own make/model/type text, so they are left
+ * exactly as they are.
+ * Resolves to the number of rows removed (0 means the make wasn't found).
+ */
+export async function deleteVehicleLookupMake(make) {
+  const rows = await VehicleLookup.deleteMany({ make });
+  const standalone = await VehicleLookupMake.deleteOne({ make });
+  await invalidatePrefix("vehicle-lookup:");
+  return rows.deletedCount + standalone.deletedCount;
+}
+
+/** Removes one Model (all of its Type rows) from under a Make. Keeps the Make. */
+export async function deleteVehicleLookupModel(make, model) {
+  const filter = { make, model };
+  if ((await VehicleLookup.countDocuments(filter)) === 0) return 0;
+  await keepMakeIfEmptied(make, { model: { $ne: model } });
+  const rows = await VehicleLookup.deleteMany(filter);
+  await invalidatePrefix("vehicle-lookup:");
+  return rows.deletedCount;
+}
+
+/**
+ * Removes one Type from a Make + Model. Keeps the Make. (A model with only
+ * that one type has nothing left to describe it, so it goes too — a Type is
+ * what a lookup row is made of.)
+ */
+export async function deleteVehicleLookupType(make, model, type) {
+  const filter = { make, model, type };
+  if ((await VehicleLookup.countDocuments(filter)) === 0) return 0;
+  await keepMakeIfEmptied(make, { $nor: [{ model, type }] });
+  const rows = await VehicleLookup.deleteMany(filter);
+  await invalidatePrefix("vehicle-lookup:");
+  return rows.deletedCount;
 }

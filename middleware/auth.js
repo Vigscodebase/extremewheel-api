@@ -85,3 +85,40 @@ export function requirePermission(requiredKey) {
     }
   };
 }
+
+/**
+ * Same as requirePermission, but passes if the role holds ANY of the given
+ * page keys. For read-only data that more than one page depends on — e.g. the
+ * Make list feeds both Vehicle Notes and Tire Size Option.
+ * @param {...string} requiredKeys - page/element keys, any one of which is enough
+ */
+export function requireAnyPermission(...requiredKeys) {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ message: "Not authenticated." });
+      }
+
+      const userRole = req.user.role;
+
+      // Master Account Bypass
+      if (userRole === "admin") return next();
+
+      const doc = await Permission.findOne({ key: "global" }).lean();
+      if (!doc) {
+        return res.status(500).json({ message: "Authorization system misconfigured. Access maps unavailable." });
+      }
+
+      const allowedPages = doc.matrix?.[userRole] || [];
+      if (!requiredKeys.some((key) => allowedPages.includes(key))) {
+        return res.status(403).json({
+          message: `Access Denied: Your assigned role (${userRole}) lacks clearance for '${requiredKeys.join("' or '")}'.`
+        });
+      }
+
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}

@@ -20,17 +20,28 @@ import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import VehicleLookup from "./models/VehicleLookup.js";
 import VehicleLookupYear from "./models/VehicleLookupYear.js";
+import VehicleLookupMake from "./models/VehicleLookupMake.js";
 import Role from "./models/Role.js";
 import AppGuide from "./models/AppGuide.js";
 import RecentActivity from "./models/RecentActivity.js";
 
 // Middleware
-import { requireAuth, requirePermission } from "./middleware/auth.js";
+import { requireAuth, requirePermission, requireAnyPermission } from "./middleware/auth.js";
 import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
-import { importVehicleLookupWorkbook, buildVehicleLookupWorkbook, quickAddVehicleLookup, quickAddVehicleLookupYear } from "./utils/vehicleLookupImporter.js";
+import {
+    importVehicleLookupWorkbook,
+    buildVehicleLookupWorkbook,
+    quickAddVehicleLookup,
+    quickAddVehicleLookupYear,
+    addVehicleLookupMake,
+    deleteVehicleLookupMake,
+    deleteVehicleLookupModel,
+    deleteVehicleLookupType,
+    deleteVehicleLookupYear,
+} from "./utils/vehicleLookupImporter.js";
 
 dotenv.config({ debug: true });
 
@@ -544,6 +555,30 @@ const requireStaffOrAdmin = (req, res, next) => {
     next();
 };
 
+// Strict role check (not the configurable per-role Permission matrix that
+// requirePermission() reads) — for an operation that must always be
+// admin-only regardless of how the Permission matrix is configured for other
+// roles. Nothing uses it at the moment: the vehicle-lookup writes it used to
+// guard are now staff-and-admin (requireStaffOrAdminOnly). Kept so an
+// endpoint can be tightened back to admin-only without rewriting the guard.
+// eslint-disable-next-line no-unused-vars
+const requireAdmin = (req, res, next) => {
+    if (req.user.role !== "admin") {
+        return res.status(403).json({ message: "This action is restricted to admin accounts." });
+    }
+    next();
+};
+
+// Strictly the "staff" and "admin" roles — unlike requireStaffOrAdmin above,
+// which only turns away "guest" and would therefore also let through any
+// custom role created in User Management. See tireOptionRouter below.
+const requireStaffOrAdminOnly = (req, res, next) => {
+    if (req.user.role !== "staff" && req.user.role !== "admin") {
+        return res.status(403).json({ message: "This action is restricted to staff and admin accounts." });
+    }
+    next();
+};
+
 vehicleNoteRouter.post("/:id/notes", requireStaffOrAdmin, async (req, res, next) => {
     try {
         const { text } = req.body;
@@ -617,23 +652,42 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
 
 // --- Vehicle Lookup Routes (predefined Make/Model/Type dropdown data) ---
 // Backs the cascading Make -> Model -> Type dropdowns on the Vehicle Notes
-// "Add / Edit vehicle" form. Read access matches vehicle-notes; only
-// staff/admin can replace the table via upload (same restriction as the
-// internal staff notes endpoints above), since an upload wipes and
-// re-populates the whole reference table for every user.
+// "Add / Edit vehicle" form, and the Make dropdown on the Tire Size Option
+// preset popup. Read access matches vehicle-notes; only staff/admin can
+// replace the table via upload (same restriction as the internal staff notes
+// endpoints above), since an upload wipes and re-populates the whole
+// reference table for every user.
+//
+// Writing to the reference lists (adding and deleting Makes, Models, Types
+// and Years) is limited to the staff and admin roles — requireStaffOrAdminOnly
+// rather than the configurable Permission matrix, so a custom role created in
+// User Management can never edit the shared lists. The UI gates the same way:
+// see `isStaffOrAdmin` in pages/vehiclenotes.jsx and `canManagePresets` in
+// pages/tiresizeoption.jsx.
 const vehicleLookupRouter = express.Router();
-vehicleLookupRouter.use(requireAuth, requirePermission("vehicle-notes"));
 
 const VEHICLE_LOOKUP_CACHE_TTL_SECONDS = Number(process.env.VEHICLE_LOOKUP_CACHE_TTL_SECONDS) || 3600;
 
-vehicleLookupRouter.get("/makes", async (req, res, next) => {
+// The Make list is read by two pages — Vehicle Notes and Tire Size Option —
+// so it's readable with access to either one. Registered ahead of the
+// router-level vehicle-notes guard below so a role that has Tire Size Option
+// but not Vehicle Notes can still fill in the preset form's Make dropdown.
+// Merges the Make/Model/Type table with makes that were added on their own
+// (see models/VehicleLookupMake.js).
+vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-options"), async (req, res, next) => {
     try {
-        const makes = await cached("vehicle-lookup:makes", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
-            VehicleLookup.distinct("make").then((m) => m.filter(Boolean).sort())
-        );
+        const makes = await cached("vehicle-lookup:makes", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, async () => {
+            const [fromLookup, standalone] = await Promise.all([
+                VehicleLookup.distinct("make"),
+                VehicleLookupMake.distinct("make"),
+            ]);
+            return Array.from(new Set([...fromLookup, ...standalone])).filter(Boolean).sort();
+        });
         res.json({ makes });
     } catch (err) { next(err); }
 });
+
+vehicleLookupRouter.use(requireAuth, requirePermission("vehicle-notes"));
 
 vehicleLookupRouter.get("/models", async (req, res, next) => {
     try {
@@ -701,14 +755,12 @@ vehicleLookupRouter.post("/import", requireStaffOrAdmin, async (req, res, next) 
 });
 
 // Adds one Make/Model/Type combo to the predefined list — this is what lets
-// anyone filling out the Vehicle Notes form type a brand new value instead
+// someone filling out the Vehicle Notes form type a brand new value instead
 // of picking from the dropdown, and have it become a real dropdown option
-// from then on. Deliberately open to any authenticated user with vehicle-
-// notes access (not staff/admin-only like /import above): unlike a full
-// sheet re-upload, this only ever adds one row and never removes anything,
-// so it's no riskier than creating the vehicle note itself. Upserts, so
-// submitting an existing combo again is a harmless no-op.
-vehicleLookupRouter.post("/quick-add", async (req, res, next) => {
+// from then on. Staff and admin only, so the shared lists can't be grown by
+// anyone else. Upserts, so submitting an existing combo again is a harmless
+// no-op.
+vehicleLookupRouter.post("/quick-add", requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const { make, model, type } = req.body;
         if (!make || !model || !type) {
@@ -719,8 +771,9 @@ vehicleLookupRouter.post("/quick-add", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// Same idea, for the independent Year dropdown.
-vehicleLookupRouter.post("/quick-add-year", async (req, res, next) => {
+// Same idea, for the independent Year dropdown — and gated the same way, so
+// Year is no longer the one list any authenticated user could grow.
+vehicleLookupRouter.post("/quick-add-year", requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const { year } = req.body;
         if (!year) return res.status(400).json({ message: "year is required." });
@@ -729,7 +782,88 @@ vehicleLookupRouter.post("/quick-add-year", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// Adds a Make on its own — the Tire Size Option preset popup only has a Make
+// to pick (no Model/Type), so this is how "+ Add new preset name…" there
+// becomes a real dropdown option. That popup is a staff-and-admin tool (the
+// preset itself is created under requireStaffOrAdminOnly), so this matches.
+// Upserts.
+vehicleLookupRouter.post("/make", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const make = typeof req.body?.make === "string" ? req.body.make.trim() : "";
+        if (!make) return res.status(400).json({ message: "make is required." });
+        await addVehicleLookupMake(make);
+        res.json({ ok: true });
+    } catch (err) { next(err); }
+});
+
+// Delete a Make / Model / Type / Year from the dropdown data — staff and
+// admin. Values come from the query string and are only accepted as plain
+// strings: these go straight into a deleteMany() filter, so an object like
+// ?make[$ne]=x must never reach it. Already-saved Vehicle Notes and tire
+// presets keep the make/model/type/year text they were saved with.
+const queryString = (value) => (typeof value === "string" ? value.trim() : "");
+
+// Removes the Make and everything under it (its Models and Types). This is
+// also what "delete a preset name" on the Tire Size Option popup calls — the
+// preset name dropdown is this same shared Make list.
+vehicleLookupRouter.delete("/make", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const make = queryString(req.query.make);
+        if (!make) return res.status(400).json({ message: "make is required." });
+        const removed = await deleteVehicleLookupMake(make);
+        if (!removed) return res.status(404).json({ message: "Make not found." });
+        res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
+// Removes one Model (and its Types) from under a Make; the Make stays.
+vehicleLookupRouter.delete("/model", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const make = queryString(req.query.make);
+        const model = queryString(req.query.model);
+        if (!make || !model) return res.status(400).json({ message: "make and model are required." });
+        const removed = await deleteVehicleLookupModel(make, model);
+        if (!removed) return res.status(404).json({ message: "Model not found." });
+        res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
+// Removes one Type from a Make + Model; the Make stays.
+vehicleLookupRouter.delete("/type", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const make = queryString(req.query.make);
+        const model = queryString(req.query.model);
+        const type = queryString(req.query.type);
+        if (!make || !model || !type) return res.status(400).json({ message: "make, model and type are required." });
+        const removed = await deleteVehicleLookupType(make, model, type);
+        if (!removed) return res.status(404).json({ message: "Type not found." });
+        res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
+// Removes one Year from the independent Year list. Nothing cascades — a Year
+// has no Models or Types under it (see models/VehicleLookupYear.js).
+vehicleLookupRouter.delete("/year", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const year = queryString(req.query.year);
+        if (!year) return res.status(400).json({ message: "year is required." });
+        const removed = await deleteVehicleLookupYear(year);
+        if (!removed) return res.status(404).json({ message: "Year not found." });
+        res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
 // --- Tire Options Routes ---
+// Create/update/delete are limited to the staff and admin roles (see
+// requireStaffOrAdminOnly above) — everyone with tire-options page access
+// can still browse the library (used by the Calculator/Comparison/Plus Size
+// pages), but only staff and admin can add to, edit, or remove from the
+// shared preset list itself.
+//
+// A preset has no free-text name: it's named after the Make picked from the
+// dropdown, so `label` always mirrors `make` (label stays on the document
+// because the Calculator, Comparison, Tech Data and suggestion chips all
+// read it).
 const tireOptionRouter = express.Router();
 
 tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
@@ -739,31 +873,40 @@ tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.post("/", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
+tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {
-        const { label, width, aspect, rim } = req.body;
-        if (!label || !width || !aspect || !rim) {
+        const { label, make, width, aspect, rim } = req.body;
+        const cleanMake = typeof make === "string" ? make.trim() : "";
+        // The Make is the preset's name; `label` is only honored as a
+        // fallback for a caller that doesn't send a make.
+        const cleanLabel = cleanMake || (typeof label === "string" ? label.trim() : "");
+        if (!cleanLabel || !width || !aspect || !rim) {
             return res.status(400).json({ message: "All fields are required." });
         }
-        const option = await TireOption.create({ label, width, aspect, rim, createdBy: req.user._id });
+        const option = await TireOption.create({ label: cleanLabel, make: cleanMake, width, aspect, rim, createdBy: req.user._id });
         res.status(201).json({ option });
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.put("/:id", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
+tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {
-        const { label, width, aspect, rim } = req.body;
-        const option = await TireOption.findByIdAndUpdate(
-            req.params.id,
-            { ...(label && { label }), ...(width && { width }), ...(aspect && { aspect }), ...(rim && { rim }) },
-            { new: true }
-        );
+        const { label, make, width, aspect, rim } = req.body;
+        const update = {};
+        if (make !== undefined) update.make = typeof make === "string" ? make.trim() : "";
+        // Name follows the Make; `label` on its own only applies when no make is being set.
+        if (update.make) update.label = update.make;
+        else if (typeof label === "string" && label.trim()) update.label = label.trim();
+        if (width) update.width = width;
+        if (aspect) update.aspect = aspect;
+        if (rim) update.rim = rim;
+
+        const option = await TireOption.findByIdAndUpdate(req.params.id, update, { new: true });
         if (!option) return res.status(404).json({ message: "Preset not found." });
         res.json({ option });
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.delete("/:id", requireAuth, requirePermission("tire-options"), async (req, res, next) => {
+tireOptionRouter.delete("/:id", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const option = await TireOption.findByIdAndDelete(req.params.id);
         if (!option) return res.status(404).json({ message: "Preset not found." });
