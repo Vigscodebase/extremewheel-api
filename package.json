@@ -11,7 +11,9 @@
     "start": "node server.js",
     "seed:admin": "node utils/seedAdmin.js",
     "import:app-guide": "node scripts/importAppGuide.js",
-    "worker:app-guide": "node workers/appGuideWorker.js"
+    "worker:app-guide": "node workers/appGuideWorker.js",
+    "import:tire-sizes": "node scripts/importTireSizes.js",
+    "worker:tire-sizes": "node workers/tireSizesWorker.js"
   },
   "repository": {
     "type": "git",

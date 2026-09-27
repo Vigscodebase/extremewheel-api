@@ -3,7 +3,7 @@ import User from "../models/User.js";
 import Permission from "../models/Permission.js";
 import { signToken, verifyToken } from "../utils/jwt.js";
 
-const RENEW_THRESHOLD_SECONDS = Number(process.env.JWT_RENEW_THRESHOLD_SECONDS) || 5 * 60; // rolling-refresh window
+// const RENEW_THRESHOLD_SECONDS = Number(process.env.JWT_RENEW_THRESHOLD_SECONDS) || 5 * 60; // rolling-refresh window
 
 export const requireAuth = async (req, res, next) => {
   try {
@@ -20,6 +20,19 @@ export const requireAuth = async (req, res, next) => {
     // 2. Verify the token
     const decoded = verifyToken(token);
 
+    /*
+     * ============================================================
+     * SLIDING SESSION / AUTOMATIC TOKEN REFRESH - TEMPORARILY DISABLED
+     * ============================================================
+     *
+     * Keeping the code here for future use.
+     *
+     * This used to check how much time was left on the token and,
+     * if it was close to expiring, silently issue a new one via the
+     * x-refresh-token response header (rolling session).
+     */
+
+    /*
     // 3. SLIDING SESSION LOGIC: Check how much time is left
     const nowInSeconds = Math.floor(Date.now() / 1000);
     const timeLeft = decoded.exp - nowInSeconds;
@@ -39,6 +52,7 @@ export const requireAuth = async (req, res, next) => {
       // CRITICAL: You MUST expose the header, otherwise the browser hides it from Axios!
       res.setHeader("Access-Control-Expose-Headers", "x-refresh-token");
     }
+    */
 
     // 4. Attach user to request and continue
     req.user = decoded; // Or fetch full user from DB if needed: await User.findById(decoded._id)

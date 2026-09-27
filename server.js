@@ -24,13 +24,16 @@ import VehicleLookupMake from "./models/VehicleLookupMake.js";
 import Role from "./models/Role.js";
 import AppGuide from "./models/AppGuide.js";
 import RecentActivity from "./models/RecentActivity.js";
+import OeTireSize from "./models/OeTireSize.js";
 
 // Middleware
 import { requireAuth, requirePermission, requireAnyPermission } from "./middleware/auth.js";
 import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
-import { tireOverallHeightInches, tireTreadWidthInches } from "./utils/tireMath.js";
+import { tireToleranceLimits } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
+import { upsertOeTireSize } from "./utils/oeTireSizeService.js";
+import { importOeTireSizeWorkbook, buildOeTireSizeWorkbook, fetchAllOeTireSizesForExport } from "./utils/oeTireSizeExcel.js";
 import {
     importVehicleLookupWorkbook,
     buildVehicleLookupWorkbook,
@@ -63,7 +66,8 @@ const corsOrigins = (process.env.CORS_ORIGINS || "")
     .filter(Boolean);
 if (corsOrigins.length > 0) {
     const cors = (await import("cors")).default;
-    app.use(cors({ origin: corsOrigins, credentials: true, exposedHeaders: ["x-refresh-token"] }));
+    // exposedHeaders: ["x-refresh-token"] // part of the disabled automatic token refresh system
+    app.use(cors({ origin: corsOrigins, credentials: true }));
 }
 
 app.use(express.json({ limit: "50mb" }));
@@ -285,11 +289,21 @@ authRouter.post("/login", authLimiter, async (req, res, next) => {
     }
 });
 
-// --- NEW SILENT REFRESH ENDPOINT ---
+/*
+ * ============================================================
+ * SILENT REFRESH ENDPOINT - TEMPORARILY DISABLED
+ * ============================================================
+ *
+ * Keeping the route here for future use.
+ *
+ * Because requireAuth succeeded, the current token was valid, and this
+ * simply issued a fresh one to extend the session (paired with the
+ * client's heartbeat + the sliding-session logic in middleware/auth.js).
+ */
+
+/*
 authRouter.post("/refresh", requireAuth, async (req, res, next) => {
     try {
-        // Because requireAuth succeeded, the current token is valid. 
-        // We simply issue a fresh one to extend their session.
         const token = signToken({
             _id: req.user._id,
             name: req.user.name,
@@ -302,6 +316,7 @@ authRouter.post("/refresh", requireAuth, async (req, res, next) => {
         next(err);
     }
 });
+*/
 
 authRouter.get("/me", requireAuth, async (req, res) => {
     const { name, email, role } = req.user;
@@ -884,6 +899,16 @@ tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res
             return res.status(400).json({ message: "All fields are required." });
         }
         const option = await TireOption.create({ label: cleanLabel, make: cleanMake, width, aspect, rim, createdBy: req.user._id });
+
+        // Keep oe_tiresize in sync with the Tire Size Option library — insert
+        // only (see upsertOeTireSize), so a size that's already on file from
+        // another source is left untouched.
+        upsertOeTireSize(
+            { width: option.width, aspect: option.aspect, rim: option.rim },
+            "tire-options",
+            { sourceRef: option._id, label: option.label }
+        ).catch((err) => logToFile(`[OeTireSize] sync from TireOption create failed: ${err.message}`));
+
         res.status(201).json({ option });
     } catch (err) { next(err); }
 });
@@ -902,6 +927,15 @@ tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, r
 
         const option = await TireOption.findByIdAndUpdate(req.params.id, update, { new: true });
         if (!option) return res.status(404).json({ message: "Preset not found." });
+
+        // A width/aspect/rim edit can introduce a size oe_tiresize hasn't
+        // seen yet — sync it the same way the create route does.
+        upsertOeTireSize(
+            { width: option.width, aspect: option.aspect, rim: option.rim },
+            "tire-options",
+            { sourceRef: option._id, label: option.label }
+        ).catch((err) => logToFile(`[OeTireSize] sync from TireOption update failed: ${err.message}`));
+
         res.json({ option });
     } catch (err) { next(err); }
 });
@@ -938,45 +972,45 @@ plusSizeRouter.post("/search", async (req, res, next) => {
             ? Math.max(0, Number(treadTolerancePct))
             : PLUS_SIZE_TREAD_TOLERANCE_PCT * 100;
 
-        const oeHeight = tireOverallHeightInches(oe);
-        const oeTread = tireTreadWidthInches(oe);
+        // Step 1: run the OE size through the exact same worksheet formulas
+        // used to precompute every oe_tiresize row — overall height, tread
+        // width, and the upper/lower bound of each at the requested
+        // tolerance (e.g. height x 1.03 / x 0.97 for a 3% window).
+        const oeLimits = tireToleranceLimits(oe, {
+            heightTolerance: heightTolPct / 100,
+            treadTolerance: treadTolPct / 100,
+        });
+        const oeHeight = oeLimits.overallHeightIn;
+        const oeTread = oeLimits.treadWidthIn;
 
-        // --- Stage 1: matching wheel diameter ---
-        // Filter the tire database down to the requested target rim (wheel
-        // diameter) first. If no target rim was given, every diameter in the
-        // library is a candidate, but this stays the first stage of the
-        // pipeline so a future "search all plus-size-appropriate diameters"
-        // feature can plug in here without touching stages 2/3.
-        const diameterQuery = {};
-        if (targetRim) diameterQuery.rim = Number(targetRim);
-        const diameterMatches = await TireOption.find(diameterQuery).lean();
+        // Step 2: only once the OE's own height range is known, query
+        // oe_tiresize for rows whose precomputed overallHeightIn falls
+        // between that lower and upper limit — an indexed range query
+        // against the library (see OeTireSize's {rim,overallHeightIn}
+        // index) instead of loading every row and computing tire math
+        // per-candidate. Wheel diameter (targetRim), when given, narrows
+        // the same query further.
+        const query = {
+            overallHeightIn: { $gte: oeLimits.heightLowerLimitIn, $lte: oeLimits.heightUpperLimitIn },
+        };
+        if (targetRim) query.rim = Number(targetRim);
+        const heightMatches = await OeTireSize.find(query).lean();
 
-        // --- Stage 2: falling within the calculated height range ---
-        // Only overall-height is computed/checked here; tread width is
-        // deliberately NOT calculated yet, since it's the more expensive/less
-        // decisive filter and there's no point computing it for a candidate
-        // that's already outside the acceptable height range.
-        const heightMatches = diameterMatches
-            .map((c) => {
-                const height = tireOverallHeightInches(c);
-                const heightDiffPct = ((height - oeHeight) / oeHeight) * 100;
-                return { candidate: c, height, heightDiffPct };
-            })
-            .filter((c) => Math.abs(c.heightDiffPct) <= heightTolPct);
-
-        // --- Stage 3: tread width, calculated only for height-range survivors ---
+        // Step 3: tread width — checked against the precomputed treadWidthIn
+        // already stored on each candidate (no re-derivation needed).
         const withinTolerance = heightMatches
-            .map(({ candidate: c, height, heightDiffPct }) => {
-                const tread = tireTreadWidthInches(c);
-                const treadDiffPct = ((tread - oeTread) / oeTread) * 100;
+            .map((c) => {
+                const heightDiffPct = ((c.overallHeightIn - oeHeight) / oeHeight) * 100;
+                const treadDiffPct = ((c.treadWidthIn - oeTread) / oeTread) * 100;
                 return {
                     _id: c._id,
-                    label: c.label,
+                    label: c.label || "",
                     width: c.width,
                     aspect: c.aspect,
                     rim: c.rim,
-                    overallHeightIn: Number(height.toFixed(3)),
-                    treadWidthIn: Number(tread.toFixed(3)),
+                    source: c.source,
+                    overallHeightIn: Number(c.overallHeightIn.toFixed(3)),
+                    treadWidthIn: Number(c.treadWidthIn.toFixed(3)),
                     heightDiffPct: Number(heightDiffPct.toFixed(3)),
                     treadDiffPct: Number(treadDiffPct.toFixed(3)),
                 };
@@ -989,6 +1023,10 @@ plusSizeRouter.post("/search", async (req, res, next) => {
                 combinedDiffPct: Number((Math.abs(r.heightDiffPct) + Math.abs(r.treadDiffPct)).toFixed(3)),
             }));
 
+        // "Closest matches (difference closest to zero) displayed first" —
+        // sort ascending on |diff| regardless of which key is chosen, so
+        // the #1 rank is always the nearest match, not just the first
+        // survivor of the tolerance filters above.
         const sortKey = { height: "heightDiffPct", tread: "treadDiffPct", combined: "combinedDiffPct" }[sortBy] || "combinedDiffPct";
         withinTolerance.sort((a, b) => Math.abs(a[sortKey]) - Math.abs(b[sortKey]));
         const results = withinTolerance.map((r, i) => ({ ...r, rank: i + 1 }));
@@ -999,6 +1037,35 @@ plusSizeRouter.post("/search", async (req, res, next) => {
             sortBy: sortKey,
             results,
         });
+    } catch (err) { next(err); }
+});
+
+// --- OE tire size library upload/download (oe_tiresize) ---
+// Same "base64 .xlsx in the JSON body" shape as /vehicle-lookup/import, and
+// the same buffer-download shape as /vehicle-lookup/export — see
+// utils/oeTireSizeExcel.js. Upload is insert-only (a duplicate width/
+// aspect/rim is left exactly as it is, never overwritten) and restricted to
+// staff/admin, matching how the Tire Size Option library itself is managed;
+// export is available to anyone with plus-size access.
+plusSizeRouter.post("/oe-tiresize/import", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const { fileBase64, fileName } = req.body;
+        if (!fileBase64 || typeof fileBase64 !== "string") {
+            return res.status(400).json({ message: "fileBase64 (the .xlsx file, base64-encoded) is required." });
+        }
+        const buffer = Buffer.from(fileBase64, "base64");
+        const result = await importOeTireSizeWorkbook(buffer, { fileName });
+        res.json(result);
+    } catch (err) { next(err); }
+});
+
+plusSizeRouter.get("/oe-tiresize/export", async (req, res, next) => {
+    try {
+        const rows = await fetchAllOeTireSizesForExport();
+        const buffer = buildOeTireSizeWorkbook(rows);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="oe-tiresize-${Date.now()}.xlsx"`);
+        res.send(buffer);
     } catch (err) { next(err); }
 });
 

@@ -2,8 +2,15 @@ import xlsx from "xlsx";
 import AppGuide from "../models/AppGuide.js";
 import { invalidatePrefix } from "../config/redis.js";
 import logToFile from "../logger.js";
+import { parseTireSizeString, upsertManyOeTireSizes } from "./oeTireSizeService.js";
 
 const BATCH_SIZE = 1000;
+
+// Per the client: also feed the oe_tiresize library from this same
+// workbook's base tire size (txtTireSize) and its 16"-20" upgrade sizes
+// (F18=16", F19=17", F20=18", F21=19", F22=20" — see DIAMETER_COLUMNS
+// below for the full F17..F30 -> diameter mapping this sheet uses).
+const OE_TIRESIZE_SOURCE_COLUMNS = ["txtTireSize", "F18", "F19", "F20", "F21", "F22"];
 
 // Maps the exact source column headers (tblAppGuide-Templatenew.xls, Sheet1)
 // to AppGuide schema fields. Keeping this explicit (rather than
@@ -85,6 +92,20 @@ function rowToDoc(row) {
   return doc;
 }
 
+// Parses txtTireSize + F18..F22 on one row into distinct {width,aspect,rim}
+// sizes, for feeding oe_tiresize. A row commonly repeats the same size
+// across several of these columns (or leaves later ones blank once no
+// bigger upgrade is offered) — dedup happens at the caller (accumulated
+// across the whole workbook, not just this row) via upsertManyOeTireSizes.
+function deriveOeTireSizesFromRow(row) {
+  const sizes = [];
+  for (const col of OE_TIRESIZE_SOURCE_COLUMNS) {
+    const parsed = parseTireSizeString(row[col]);
+    if (parsed) sizes.push(parsed);
+  }
+  return sizes;
+}
+
 /**
  * Streams a workbook into the AppGuide collection using batched upserts
  * (keyed on the source row ID, so re-running an import is idempotent).
@@ -100,6 +121,12 @@ export async function importAppGuideFile(filePath, onProgress) {
   let processed = 0;
   let batch = [];
 
+  // Accumulated across the whole workbook (not per-batch) so a size that
+  // repeats across thousands of rows only triggers one insert attempt —
+  // dedup + the insert-only upsert itself happen in upsertManyOeTireSizes.
+  const oeSizes = [];
+  const oeSourceRefBySize = new Map();
+
   for (const row of rows) {
     const doc = rowToDoc(row);
     if (!doc.sourceId) continue; // skip malformed/blank rows
@@ -111,6 +138,12 @@ export async function importAppGuideFile(filePath, onProgress) {
         upsert: true,
       },
     });
+
+    for (const size of deriveOeTireSizesFromRow(row)) {
+      oeSizes.push(size);
+      const key = `${size.width}|${size.aspect}|${size.rim}`;
+      if (!oeSourceRefBySize.has(key)) oeSourceRefBySize.set(key, String(doc.sourceId));
+    }
 
     if (batch.length >= BATCH_SIZE) {
       await AppGuide.bulkWrite(batch, { ordered: false });
@@ -131,8 +164,15 @@ export async function importAppGuideFile(filePath, onProgress) {
   // cache is stale.
   await invalidatePrefix("app-guide:");
 
-  logToFile(`[AppGuideImport] ✅ Completed: ${processed}/${total} rows upserted from ${filePath}`);
-  return { processed, total };
+  const oeResult = await upsertManyOeTireSizes(oeSizes, "tblAppGuide", {
+    sourceRefFor: (s) => oeSourceRefBySize.get(`${s.width}|${s.aspect}|${s.rim}`),
+  });
+
+  logToFile(
+    `[AppGuideImport] ✅ Completed: ${processed}/${total} rows upserted from ${filePath}; ` +
+      `oe_tiresize: ${oeResult.inserted}/${oeSizes.length} sizes inserted (${oeResult.duplicates} duplicate/skipped)`
+  );
+  return { processed, total, oeTireSizesInserted: oeResult.inserted };
 }
 
 export default importAppGuideFile;

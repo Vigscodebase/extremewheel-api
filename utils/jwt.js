@@ -10,11 +10,28 @@ const __dirname = path.dirname(__filename);
 // Assumes jwt.js lives in utils/, so ".." navigates back to the project root
 const rootDir = path.join(__dirname, "..");
 
-// Key locations and token lifetime are environment-driven so the same code
-// works unchanged across local/staging/production without editing source.
+// Key locations are environment-driven so the same code works unchanged
+// across local/staging/production without editing source.
 const PRIVATE_KEY_PATH = process.env.JWT_PRIVATE_KEY_PATH || "/etc/extremewheel-secrets/private.pem";
 const PUBLIC_KEY_PATH = process.env.JWT_PUBLIC_KEY_PATH || "/etc/extremewheel-secrets/public.pem";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "10m";
+
+/*
+ * ============================================================
+ * TOKEN EXPIRY - TEMPORARILY DISABLED
+ * ============================================================
+ *
+ * Keeping this here for future use.
+ *
+ * Previously the token lifetime was environment-driven and defaulted
+ * to 10 minutes, working alongside the sliding-session refresh in
+ * middleware/auth.js and the /auth/refresh endpoint.
+ *
+ * With no `expiresIn` passed to jwt.sign below, the JWT has no `exp`
+ * claim at all, so jwt.verify never rejects it for expiry — the user
+ * stays logged in until they explicitly log out (which just clears
+ * the token client-side).
+ */
+// const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "10m";
 
 let privateKey;
 let publicKey;
@@ -39,7 +56,7 @@ function signToken(user) {
     privateKey,
     {
       algorithm: "RS256",
-      expiresIn: JWT_EXPIRES_IN,
+      // expiresIn: JWT_EXPIRES_IN, // token expiry disabled — see note above
     }
   );
 }
