@@ -957,7 +957,25 @@ const PLUS_SIZE_TREAD_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_TREAD_TOLERAN
 
 plusSizeRouter.post("/search", async (req, res, next) => {
     try {
-        const { width, aspect, rim, targetRim, heightTolerancePct, treadTolerancePct, sortBy } = req.body;
+        const { width, aspect, rim } = req.body;
+        // TEMPORARILY DISABLED — targetRim / heightTolerancePct /
+        // treadTolerancePct / sortBy overrides from the request body.
+        // Reason: the frontend controls for these (Target rim, Height
+        // tolerance, Tread width tolerance, Sort results by on the Plus
+        // Size page) have a bug where clearing/leaving the tolerance
+        // fields blank sends heightTolerancePct/treadTolerancePct as 0
+        // instead of omitting them, since Number("") === 0 in JS — so the
+        // search silently ran at a 0% tolerance (effectively "exact float
+        // match only") and always came back empty. Disabling the override
+        // path here (in step with the matching frontend fields, also
+        // commented out in pages/plussizeoptions.jsx) makes every search
+        // fall back to the server's own defaults below, every time,
+        // matching the original spec: OE width/aspect/rim in, its
+        // own height range computed, then a straight match against
+        // oe_tiresize with no manual overrides. Re-enable by uncommenting
+        // this destructure and the two blocks below once the frontend
+        // fields are fixed to send `undefined` (not `0`/`""`) when empty.
+        // const { targetRim, heightTolerancePct, treadTolerancePct, sortBy } = req.body;
         const oe = { width: Number(width), aspect: Number(aspect), rim: Number(rim) };
         if (!oe.width || !oe.aspect || !oe.rim) {
             return res.status(400).json({ message: "OE width, aspect and rim are required." });
@@ -965,12 +983,16 @@ plusSizeRouter.post("/search", async (req, res, next) => {
 
         // Client can narrow/widen the tolerance windows per search; falls back
         // to the server-configured defaults when not supplied.
-        const heightTolPct = Number.isFinite(Number(heightTolerancePct)) && heightTolerancePct !== ""
-            ? Math.max(0, Number(heightTolerancePct))
-            : PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100;
-        const treadTolPct = Number.isFinite(Number(treadTolerancePct)) && treadTolerancePct !== ""
-            ? Math.max(0, Number(treadTolerancePct))
-            : PLUS_SIZE_TREAD_TOLERANCE_PCT * 100;
+        // TEMPORARILY DISABLED — see the note above; always use the server
+        // defaults for now instead of reading an override from the client.
+        // const heightTolPct = Number.isFinite(Number(heightTolerancePct)) && heightTolerancePct !== ""
+        //     ? Math.max(0, Number(heightTolerancePct))
+        //     : PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100;
+        // const treadTolPct = Number.isFinite(Number(treadTolerancePct)) && treadTolerancePct !== ""
+        //     ? Math.max(0, Number(treadTolerancePct))
+        //     : PLUS_SIZE_TREAD_TOLERANCE_PCT * 100;
+        const heightTolPct = PLUS_SIZE_HEIGHT_TOLERANCE_PCT * 100;
+        const treadTolPct = PLUS_SIZE_TREAD_TOLERANCE_PCT * 100;
 
         // Step 1: run the OE size through the exact same worksheet formulas
         // used to precompute every oe_tiresize row — overall height, tread
@@ -988,12 +1010,12 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         // between that lower and upper limit — an indexed range query
         // against the library (see OeTireSize's {rim,overallHeightIn}
         // index) instead of loading every row and computing tire math
-        // per-candidate. Wheel diameter (targetRim), when given, narrows
-        // the same query further.
+        // per-candidate.
         const query = {
             overallHeightIn: { $gte: oeLimits.heightLowerLimitIn, $lte: oeLimits.heightUpperLimitIn },
         };
-        if (targetRim) query.rim = Number(targetRim);
+        // TEMPORARILY DISABLED — targetRim narrowing (see note above).
+        // if (targetRim) query.rim = Number(targetRim);
         const heightMatches = await OeTireSize.find(query).lean();
 
         // Step 3: tread width — checked against the precomputed treadWidthIn
@@ -1024,10 +1046,12 @@ plusSizeRouter.post("/search", async (req, res, next) => {
             }));
 
         // "Closest matches (difference closest to zero) displayed first" —
-        // sort ascending on |diff| regardless of which key is chosen, so
-        // the #1 rank is always the nearest match, not just the first
-        // survivor of the tolerance filters above.
-        const sortKey = { height: "heightDiffPct", tread: "treadDiffPct", combined: "combinedDiffPct" }[sortBy] || "combinedDiffPct";
+        // sort ascending on |diff|, so the #1 rank is always the nearest
+        // match, not just the first survivor of the tolerance filters above.
+        // TEMPORARILY DISABLED — sortBy override (see note above); always
+        // sort by the combined height+tread closeness for now.
+        // const sortKey = { height: "heightDiffPct", tread: "treadDiffPct", combined: "combinedDiffPct" }[sortBy] || "combinedDiffPct";
+        const sortKey = "combinedDiffPct";
         withinTolerance.sort((a, b) => Math.abs(a[sortKey]) - Math.abs(b[sortKey]));
         const results = withinTolerance.map((r, i) => ({ ...r, rank: i + 1 }));
 
