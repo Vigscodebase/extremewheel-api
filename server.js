@@ -1018,7 +1018,7 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         // if (targetRim) query.rim = Number(targetRim);
         const heightMatches = await OeTireSize.find(query).lean();
 
-        // Step 3: tread width — checked against the precomputed treadWidthIn
+        // Step 3: tread width — diff vs the OE from the precomputed treadWidthIn (display + ranking only, NOT a filter)
         // already stored on each candidate (no re-derivation needed).
         const withinTolerance = heightMatches
             .map((c) => {
@@ -1037,7 +1037,14 @@ plusSizeRouter.post("/search", async (req, res, next) => {
                     treadDiffPct: Number(treadDiffPct.toFixed(3)),
                 };
             })
-            .filter((r) => Math.abs(r.treadDiffPct) <= treadTolPct)
+            // TEMPORARILY DISABLED — tread width is NOT a filter. Per the spec the
+            // match is decided by the overall-height range (lower/upper limit)
+            // alone; tread width is still calculated and shown (and still feeds
+            // the "closest first" ranking below), but a size is never dropped for
+            // it. With this filter on, e.g. 305/35R20 (height -0.249%, well inside
+            // the +/-3% window) was hidden for a 265/55R17 OE because its tread was
+            // 15.094% off vs the 15% limit. Re-enable by uncommenting:
+            // .filter((r) => Math.abs(r.treadDiffPct) <= treadTolPct)
             .map((r) => ({
                 ...r,
                 // Percentage-difference ranking score: combined closeness to OE
