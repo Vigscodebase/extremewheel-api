@@ -28,6 +28,18 @@ export const DEFAULT_TREAD_TOLERANCE = Number(process.env.PLUS_SIZE_TREAD_TOLERA
  * 225/60R16 at 3%: height 26.63" -> lower 25.8311" / upper 27.4289".
  * Mirrors the "Upper & Lower Overall Height Limit" worksheet formula
  * exactly: tolerance = value * pct; lower = value - tolerance; upper = value + tolerance.
+ *
+ * The worksheet's own arithmetic rounds the height to 2 decimals BEFORE
+ * multiplying by the tolerance percentage ("26.63 x 0.03", not
+ * "26.629921... x 0.03") — so this does the same for the WINDOW
+ * (heightUpperLimitIn/heightLowerLimitIn/treadUpperLimitIn/treadLowerLimitIn),
+ * matching the worksheet's limits exactly rather than the ~0.0001" off you'd
+ * get from tolerancing the full-precision value. overallHeightIn/treadWidthIn
+ * themselves are returned at full precision, unrounded — that's the actual
+ * computed size, not an intermediate used only for the tolerance math, and
+ * callers (the /plus-size/search response, the oe_tiresize documents this
+ * builds) should keep showing/storing that precise number, not the
+ * 2-decimal one used only internally here to size the window.
  */
 export function tireToleranceLimits(
   { width, aspect, rim },
@@ -36,15 +48,20 @@ export function tireToleranceLimits(
   const overallHeightIn = tireOverallHeightInches({ width, aspect, rim });
   const treadWidthIn = tireTreadWidthInches({ width });
 
-  const heightDelta = overallHeightIn * heightTolerance;
-  const treadDelta = treadWidthIn * treadTolerance;
+  // Worksheet-rounded (2dp) bases — used only to size the tolerance window
+  // below, never returned/displayed on their own.
+  const heightForWindow = Math.round(overallHeightIn * 100) / 100;
+  const treadForWindow = Math.round(treadWidthIn * 100) / 100;
+
+  const heightDelta = heightForWindow * heightTolerance;
+  const treadDelta = treadForWindow * treadTolerance;
 
   return {
     overallHeightIn,
     treadWidthIn,
-    heightUpperLimitIn: overallHeightIn + heightDelta,
-    heightLowerLimitIn: overallHeightIn - heightDelta,
-    treadUpperLimitIn: treadWidthIn + treadDelta,
-    treadLowerLimitIn: treadWidthIn - treadDelta,
+    heightUpperLimitIn: heightForWindow + heightDelta,
+    heightLowerLimitIn: heightForWindow - heightDelta,
+    treadUpperLimitIn: treadForWindow + treadDelta,
+    treadLowerLimitIn: treadForWindow - treadDelta,
   };
 }

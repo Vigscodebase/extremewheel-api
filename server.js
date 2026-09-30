@@ -1063,7 +1063,28 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         const results = withinTolerance.map((r, i) => ({ ...r, rank: i + 1 }));
 
         res.json({
-            oe: { ...oe, overallHeightIn: Number(oeHeight.toFixed(3)), treadWidthIn: Number(oeTread.toFixed(3)) },
+            oe: {
+                ...oe,
+                // 4dp, not 3 — precise enough that formatInches() on the client
+                // (which itself always shows 4dp) displays the real computed
+                // value instead of a zero-padded 3dp one (28.4760 vs the actual
+                // 28.4764). This is the OE's own height/tread, never rounded
+                // for the tolerance window below — see tireToleranceLimits().
+                overallHeightIn: Number(oeHeight.toFixed(4)),
+                treadWidthIn: Number(oeTread.toFixed(4)),
+                // The actual window this search queried against — sending it
+                // back lets the tolerance cards on the Plus Size page display
+                // exactly what was used, instead of re-deriving it client-side
+                // from the (rounded) overallHeightIn above, which is what
+                // produced the ~0.0001" drift off the worksheet noticed
+                // earlier (28.4760-based lower/upper vs the true
+                // 28.4764-based ones). buildToleranceWindow() in
+                // plussizeoptions.jsx already prefers these fields when present.
+                heightLowerLimitIn: Number(oeLimits.heightLowerLimitIn.toFixed(4)),
+                heightUpperLimitIn: Number(oeLimits.heightUpperLimitIn.toFixed(4)),
+                treadLowerLimitIn: Number(oeLimits.treadLowerLimitIn.toFixed(4)),
+                treadUpperLimitIn: Number(oeLimits.treadUpperLimitIn.toFixed(4)),
+            },
             tolerances: { heightPct: heightTolPct, treadPct: treadTolPct },
             sortBy: sortKey,
             results,
