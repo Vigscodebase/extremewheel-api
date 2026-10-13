@@ -7,6 +7,7 @@ import path from "path";
 import helmet from "helmet";
 import compression from "compression";
 import crypto from "crypto";
+import mongoose from "mongoose";
 
 import logToFile from "./logger.js";
 import connectDB from "./config/db.js";
@@ -18,6 +19,7 @@ import User from "./models/User.js";
 import Permission from "./models/Permission.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
+import Customer from "./models/Customer.js";
 import VehicleLookup from "./models/VehicleLookup.js";
 import VehicleLookupYear from "./models/VehicleLookupYear.js";
 import VehicleLookupMake from "./models/VehicleLookupMake.js";
@@ -32,6 +34,7 @@ import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireToleranceLimits } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
+import { parseCustomerInput } from "./utils/customerFields.js";
 import { upsertOeTireSize } from "./utils/oeTireSizeService.js";
 import { importOeTireSizeWorkbook, buildOeTireSizeWorkbook, fetchAllOeTireSizesForExport } from "./utils/oeTireSizeExcel.js";
 import {
@@ -468,10 +471,43 @@ permissionRouter.put("/", requireAuth, requirePermission("user-management"), asy
 const vehicleNoteRouter = express.Router();
 vehicleNoteRouter.use(requireAuth, requirePermission("vehicle-notes"));
 
+// Customer name / email / phone are personal data, so — like the internal staff
+// notes — they are only ever sent to staff and admin. Everyone else gets the
+// vehicle without its customer.
+const canViewCustomers = (req) => req.user.role === "staff" || req.user.role === "admin";
+
 vehicleNoteRouter.get("/", requireAuth, async (req, res, next) => {
     try {
-        const vehicles = await VehicleNote.find().sort({ createdAt: -1 });
+        let query = VehicleNote.find().sort({ createdAt: -1 });
+        query = canViewCustomers(req)
+            ? query.populate("customer", "fullName email phone")
+            : query.select("-customer");
+        const vehicles = await query;
         res.json({ vehicles });
+    } catch (err) { next(err); }
+});
+
+// Single vehicle — backs the read-only detail page (/vehicle-notes/:id).
+// Internal staff notes and the creator's name are staff/admin only; anyone
+// else gets them stripped here (the client hides them for the same roles).
+vehicleNoteRouter.get("/:id", async (req, res, next) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(404).json({ message: "Vehicle not found." });
+        }
+        const vehicle = await VehicleNote.findById(req.params.id)
+            .populate("createdBy", "name")
+            .populate("customer", "fullName email phone")
+            .lean();
+        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+
+        const canSeeInternal = req.user.role === "staff" || req.user.role === "admin";
+        if (!canSeeInternal) {
+            vehicle.staffNotes = [];
+            delete vehicle.createdBy;
+            delete vehicle.customer;
+        }
+        res.json({ vehicle });
     } catch (err) { next(err); }
 });
 
@@ -490,13 +526,38 @@ function normalizeSpec(spec) {
     };
 }
 
+// Reads the optional `customer` field of a create/update body.
+//   undefined        -> { skip: true }   field not sent, leave as is
+//   "" / null        -> { clear: true }  detach the customer
+//   a customer id    -> { id }           attach that customer (must exist)
+// Only staff and admin may touch it at all.
+async function resolveCustomerField(req, customer) {
+    if (customer === undefined) return { skip: true };
+    if (!canViewCustomers(req)) {
+        // A non-staff save that carries an empty customer field isn't trying
+        // to change anything — only an actual assignment is refused.
+        if (customer === null || customer === "") return { skip: true };
+        return { error: { status: 403, message: "Only staff and admin can assign a customer." } };
+    }
+    if (customer === null || customer === "") return { clear: true };
+    if (typeof customer !== "string" || !mongoose.isValidObjectId(customer)) {
+        return { error: { status: 400, message: "Invalid customer." } };
+    }
+    const exists = await Customer.exists({ _id: customer });
+    if (!exists) return { error: { status: 400, message: "That customer no longer exists." } };
+    return { id: customer };
+}
+
 vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     try {
-        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes } = req.body;
+        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes, customer } = req.body;
 
         if (!name || !make || !model || !type) {
             return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
         }
+
+        const customerField = await resolveCustomerField(req, customer);
+        if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
 
         // Map initial staff notes securely if provided during "Add Vehicle"
         let mappedNotes = [];
@@ -524,18 +585,26 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
             existingSpec: normalizeSpec(existingSpec),
             upgradedSpec: normalizeSpec(upgradedSpec),
             eventDate: eventDate ? new Date(eventDate) : undefined,
+            ...(customerField.id && { customer: customerField.id }),
             createdBy: req.user._id,
         });
+        if (canViewCustomers(req)) await vehicle.populate("customer", "fullName email phone");
+        else vehicle.customer = undefined;
         res.status(201).json({ vehicle });
     } catch (err) { next(err); }
 });
 
 vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
-        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = req.body;
+        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, customer } = req.body;
+
+        const customerField = await resolveCustomerField(req, customer);
+        if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
+
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             {
+                ...(customerField.id && { customer: customerField.id }),
                 ...(name && { name }),
                 ...(make && { make }),
                 ...(type && { type }),
@@ -549,10 +618,13 @@ vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
                 ...(existingSpec !== undefined && { existingSpec: normalizeSpec(existingSpec) }),
                 ...(upgradedSpec !== undefined && { upgradedSpec: normalizeSpec(upgradedSpec) }),
                 ...(eventDate !== undefined && { eventDate: eventDate ? new Date(eventDate) : null }),
+                ...(customerField.clear && { $unset: { customer: 1 } }),
             },
             { new: true }
         );
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
+        if (canViewCustomers(req)) await vehicle.populate("customer", "fullName email phone");
+        else vehicle.customer = undefined;
         res.json({ vehicle });
     } catch (err) { next(err); }
 });
@@ -573,10 +645,7 @@ const requireStaffOrAdmin = (req, res, next) => {
 // Strict role check (not the configurable per-role Permission matrix that
 // requirePermission() reads) — for an operation that must always be
 // admin-only regardless of how the Permission matrix is configured for other
-// roles. Nothing uses it at the moment: the vehicle-lookup writes it used to
-// guard are now staff-and-admin (requireStaffOrAdminOnly). Kept so an
-// endpoint can be tightened back to admin-only without rewriting the guard.
-// eslint-disable-next-line no-unused-vars
+// roles. Used by the customer edit / delete routes below.
 const requireAdmin = (req, res, next) => {
     if (req.user.role !== "admin") {
         return res.status(403).json({ message: "This action is restricted to admin accounts." });
@@ -662,6 +731,112 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
         const vehicle = await VehicleNote.findByIdAndDelete(req.params.id);
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
         res.json({ success: true });
+    } catch (err) { next(err); }
+});
+
+// --- Customer Routes ---
+// Customers that a vehicle note can be attached to (see models/Customer.js).
+// Everything here is personal data, so the whole router is limited to the
+// staff and admin roles (strict role check, not the configurable Permission
+// matrix — same reasoning as requireStaffOrAdminOnly above):
+//   - list / add: staff and admin
+//   - edit / delete: admin only
+// Email and phone are unique; a clash is reported per field.
+const customerRouter = express.Router();
+customerRouter.use(requireAuth, requireStaffOrAdminOnly);
+
+// Which unique field (if any) already belongs to a *different* customer.
+async function findCustomerConflict({ email, phone }, excludeId) {
+    const or = [];
+    if (email) or.push({ email });
+    if (phone) or.push({ phone });
+    if (or.length === 0) return null;
+    const filter = { $or: or };
+    if (excludeId) filter._id = { $ne: excludeId };
+    const hit = await Customer.findOne(filter).select("email phone").lean();
+    if (!hit) return null;
+    if (email && hit.email === email) return "A customer with this email already exists.";
+    return "A customer with this phone number already exists.";
+}
+
+// A unique-index violation that slipped past findCustomerConflict (two
+// requests racing) — turn it into the same per-field message.
+function duplicateKeyMessage(err) {
+    if (err?.code !== 11000) return null;
+    const field = Object.keys(err.keyPattern || err.keyValue || {})[0];
+    if (field === "email") return "A customer with this email already exists.";
+    if (field === "phone") return "A customer with this phone number already exists.";
+    return "A customer with these details already exists.";
+}
+
+customerRouter.get("/", async (req, res, next) => {
+    try {
+        const customers = await Customer.find()
+            .select("fullName email phone")
+            .collation({ locale: "en", strength: 2 })
+            .sort({ fullName: 1 })
+            .lean();
+        res.json({ customers });
+    } catch (err) { next(err); }
+});
+
+customerRouter.post("/", async (req, res, next) => {
+    try {
+        const parsed = parseCustomerInput(req.body);
+        if (parsed.error) return res.status(400).json({ message: parsed.error });
+
+        const conflict = await findCustomerConflict(parsed.value);
+        if (conflict) return res.status(409).json({ message: conflict });
+
+        const customer = await Customer.create({ ...parsed.value, createdBy: req.user._id });
+        res.status(201).json({
+            customer: { _id: customer._id, fullName: customer.fullName, email: customer.email, phone: customer.phone },
+        });
+    } catch (err) {
+        const dup = duplicateKeyMessage(err);
+        if (dup) return res.status(409).json({ message: dup });
+        next(err);
+    }
+});
+
+customerRouter.put("/:id", requireAdmin, async (req, res, next) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(404).json({ message: "Customer not found." });
+        }
+        // Full replace of the three editable fields — the form always sends all three.
+        const parsed = parseCustomerInput(req.body);
+        if (parsed.error) return res.status(400).json({ message: parsed.error });
+
+        const conflict = await findCustomerConflict(parsed.value, req.params.id);
+        if (conflict) return res.status(409).json({ message: conflict });
+
+        const customer = await Customer.findByIdAndUpdate(
+            req.params.id,
+            { $set: parsed.value },
+            { new: true, runValidators: true }
+        ).select("fullName email phone").lean();
+        if (!customer) return res.status(404).json({ message: "Customer not found." });
+        res.json({ customer });
+    } catch (err) {
+        const dup = duplicateKeyMessage(err);
+        if (dup) return res.status(409).json({ message: dup });
+        next(err);
+    }
+});
+
+// Deleting a customer detaches them from any vehicle notes that pointed at
+// them (the vehicles themselves are kept) so nothing is left referencing a
+// customer that no longer exists.
+customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(404).json({ message: "Customer not found." });
+        }
+        const customer = await Customer.findByIdAndDelete(req.params.id);
+        if (!customer) return res.status(404).json({ message: "Customer not found." });
+        const detached = await VehicleNote.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
+        res.json({ success: true, detachedVehicles: detached.modifiedCount ?? 0 });
     } catch (err) { next(err); }
 });
 
@@ -1619,6 +1794,7 @@ app.use("/auth", authRouter);
 app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
 app.use("/vehicle-notes", vehicleNoteRouter);
+app.use("/customers", customerRouter);
 app.use("/vehicle-lookup", vehicleLookupRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/plus-size", plusSizeRouter);

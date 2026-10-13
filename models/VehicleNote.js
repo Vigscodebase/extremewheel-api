@@ -96,6 +96,13 @@ const vehicleNoteSchema = new Schema(
       ],
       default: [],
     },
+    // The customer this vehicle belongs to (optional). Populated on reads so
+    // the list can show / search / filter by the customer's name.
+    customer: {
+      type: Schema.Types.ObjectId,
+      ref: "Customer",
+      index: true,
+    },
     createdBy: {
       type: Schema.Types.ObjectId,
       ref: "User",
