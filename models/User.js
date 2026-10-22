@@ -24,6 +24,14 @@ const userSchema = new mongoose.Schema({
     enum: ["admin", "staff", "guest"],
     default: "guest",
   },
+  // Page + element permissions granted to THIS user (see
+  // config/permissionCatalog.js). They belong to the user's email: changing the
+  // email resets this to [] (see PUT /users/:id), and new accounts start with
+  // none. Admin accounts ignore this list — they always have full access.
+  permissions: {
+    type: [String],
+    default: [],
+  },
   createdAt: {
     type: Date,
     default: Date.now,

@@ -13,7 +13,8 @@
     "import:app-guide": "node scripts/importAppGuide.js",
     "worker:app-guide": "node workers/appGuideWorker.js",
     "import:tire-sizes": "node scripts/importTireSizes.js",
-    "worker:tire-sizes": "node workers/tireSizesWorker.js"
+    "worker:tire-sizes": "node workers/tireSizesWorker.js",
+    "migrate:permissions": "node scripts/migrateRolePermissionsToUsers.js"
   },
   "repository": {
     "type": "git",

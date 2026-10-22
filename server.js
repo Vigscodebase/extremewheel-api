@@ -16,7 +16,6 @@ import rateLimit from "express-rate-limit";
 
 // Models
 import User from "./models/User.js";
-import Permission from "./models/Permission.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import Customer from "./models/Customer.js";
@@ -29,7 +28,8 @@ import RecentActivity from "./models/RecentActivity.js";
 import OeTireSize from "./models/OeTireSize.js";
 
 // Middleware
-import { requireAuth, requirePermission, requireAnyPermission } from "./middleware/auth.js";
+import { requireAuth, requirePermission, requireAnyPermission, loadAccess, hasPermission } from "./middleware/auth.js";
+import { NAV_PAGES, ALL_PERMISSION_KEYS, HIDDEN_PAGE_KEYS, sanitizePermissions } from "./config/permissionCatalog.js";
 import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix } from "./config/redis.js";
 import { tireToleranceLimits } from "./utils/tireMath.js";
@@ -358,12 +358,30 @@ userRouter.put("/:id", requireAuth, async (req, res, next) => {
         const user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ message: "User not found." });
 
+        // Permissions belong to the email address. If the email changes, this
+        // may be a different person (or a reassigned mailbox), so whatever the
+        // old address was granted is wiped and an admin has to grant access
+        // again for the new one.
+        let permissionsReset = false;
+        if (typeof email === "string" && email.trim()) {
+            const nextEmail = email.trim().toLowerCase();
+            if (!EMAIL_RE.test(nextEmail)) {
+                return res.status(400).json({ message: "Enter a valid email address." });
+            }
+            if (nextEmail !== user.email) {
+                const taken = await User.exists({ email: nextEmail, _id: { $ne: user._id } });
+                if (taken) return res.status(409).json({ message: "An account with that email already exists." });
+                permissionsReset = (user.permissions || []).length > 0;
+                user.email = nextEmail;
+                user.permissions = [];
+            }
+        }
+
         if (name) user.name = name;
-        if (email) user.email = email;
         if (role) user.role = role;
         if (password) user.password = password;
         await user.save();
-        res.json({ user });
+        res.json({ user, permissionsReset });
     } catch (err) { next(err); }
 });
 
@@ -392,78 +410,77 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
     }
 });
 
-// --- Shared page/navigation registry ---
-const NAV_PAGES = [
-    { key: "dashboard", label: "Dashboard", path: "/dashboard", icon: "LayoutDashboard" },
-    { key: "tire-calculator", label: "Tire Size Calculator", path: "/tire-calculator", icon: "Calculator" },
-    { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
-    { key: "plus-size", label: "Plus Size Options", path: "/plus-size", icon: "TrendingUp" },
-    { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
-    { key: "tech-data", label: "Tech Data", path: "/tech-data", icon: "Wrench" },
-    { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
-    { key: "reports", label: "Reporting & Data Export", path: "/reports", icon: "FileBarChart" },
-    { key: "user-management", label: "User Management", path: "/user-management", icon: "Users" }
-];
-const ALL_PAGE_KEYS = NAV_PAGES.map((p) => p.key);
-
 // --- Permission Routes ---
+// Access is granted PER USER, keyed by the user's unique email, and stored on
+// the User document (keys live in config/permissionCatalog.js). There is no
+// role-based matrix any more; the only role rule left is that an admin account
+// always has everything.
 const permissionRouter = express.Router();
-const DEFAULTS = {
-    key: "global",
-    matrix: {
-        admin: ALL_PAGE_KEYS,
-        staff: [
-            "dashboard",
-            "tire-calculator",
-            "tire-comparison",
-            "tire-options",
-            "plus-size",
-            "application-guide",
-            "tech-data",
-            "vehicle-notes",
-            "reports",
-        ],
-        guest: ["dashboard", "tire-calculator", "tire-comparison"],
-    }
-};
 
-const getOrCreatePermissions = async () => {
-    let doc = await Permission.findOne({ key: "global" });
-    if (!doc) doc = await Permission.create(DEFAULTS);
-
-    if (JSON.stringify(doc.matrix.get("admin") || []) !== JSON.stringify(ALL_PAGE_KEYS)) {
-        doc.matrix.set("admin", ALL_PAGE_KEYS);
-        await doc.save();
-    }
-
-    return doc;
-};
-
-permissionRouter.get("/", requireAuth, async (req, res, next) => {
+// The signed-in user's own grants — what the client uses to decide which pages,
+// dashboard tiles and buttons to show. Read fresh from the database, so a
+// change an admin just made applies without the user having to sign in again.
+permissionRouter.get("/me", requireAuth, async (req, res, next) => {
     try {
-        const doc = await getOrCreatePermissions();
-        res.json({ permissions: doc.matrix.toJSON() });
+        const access = await loadAccess(req);
+        if (!access) {
+            return res.status(401).json({ message: "Not authorized, this account no longer exists." });
+        }
+        res.json({
+            email: access.email,
+            isAdmin: access.isAdmin,
+            permissions: access.isAdmin ? ALL_PERMISSION_KEYS : [...access.permissions],
+        });
     } catch (err) { next(err); }
 });
 
-permissionRouter.put("/", requireAuth, requirePermission("user-management"), async (req, res, next) => {
+// Replace one user's grants. The body must name the email the admin was looking
+// at: permissions are granted to an email address, so if that user's email was
+// changed in the meantime (which resets their permissions) the save is refused
+// rather than silently granting access to whoever holds the account now.
+permissionRouter.put("/users/:id", requireAuth, requirePermission("user-management"), async (req, res, next) => {
     try {
-        const { matrix } = req.body;
+        const { email, permissions } = req.body;
 
-        if (!matrix || typeof matrix !== "object") {
-            return res.status(400).json({ message: "A valid 'matrix' object is required." });
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(404).json({ message: "User not found." });
+        }
+        if (typeof email !== "string" || !email.trim()) {
+            return res.status(400).json({ message: "email is required — permissions are granted to an email address." });
+        }
+        if (!Array.isArray(permissions)) {
+            return res.status(400).json({ message: "permissions must be an array of permission keys." });
         }
 
-        const doc = await getOrCreatePermissions();
-        matrix.admin = ALL_PAGE_KEYS;
+        const normalizedEmail = email.trim().toLowerCase();
+        const existing = await User.findById(req.params.id).select("email role permissions");
+        if (!existing) return res.status(404).json({ message: "User not found." });
+        if (existing.role === "admin") {
+            return res.status(400).json({ message: "Admin accounts always have full access." });
+        }
+        if (existing.email !== normalizedEmail) {
+            return res.status(409).json({ message: "This user's email has changed. Reload the page and review their access again." });
+        }
 
-        doc.matrix = matrix;
-        doc.updatedAt = new Date();
-        doc.updatedBy = req.user._id;
+        // Grants for pages that are hidden from the permissions screen are not
+        // editable there, so keep whatever the user already holds.
+        const keptHidden = (existing.permissions || []).filter((k) => HIDDEN_PAGE_KEYS.includes(k));
+        const next = sanitizePermissions([...permissions, ...keptHidden]);
 
-        await doc.save();
+        // Matching on the email in the filter makes the check above atomic: if
+        // the email changed between the read and this write, nothing is saved.
+        const updated = await User.findOneAndUpdate(
+            { _id: existing._id, email: normalizedEmail },
+            { $set: { permissions: next } },
+            { new: true }
+        ).select("name email role permissions");
+        if (!updated) {
+            return res.status(409).json({ message: "This user's email has changed. Reload the page and review their access again." });
+        }
 
-        res.json({ permissions: doc.matrix.toJSON() });
+        res.json({
+            user: { _id: updated._id, name: updated.name, email: updated.email, role: updated.role, permissions: updated.permissions },
+        });
     } catch (err) { next(err); }
 });
 
@@ -548,7 +565,7 @@ async function resolveCustomerField(req, customer) {
     return { id: customer };
 }
 
-vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
+vehicleNoteRouter.post("/", requireAuth, requirePermission("vehicle-notes.add"), async (req, res, next) => {
     try {
         const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes, customer } = req.body;
 
@@ -594,7 +611,7 @@ vehicleNoteRouter.post("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-vehicleNoteRouter.put("/:id", requireAuth, async (req, res, next) => {
+vehicleNoteRouter.put("/:id", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
         const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, customer } = req.body;
 
@@ -642,10 +659,10 @@ const requireStaffOrAdmin = (req, res, next) => {
     next();
 };
 
-// Strict role check (not the configurable per-role Permission matrix that
-// requirePermission() reads) — for an operation that must always be
-// admin-only regardless of how the Permission matrix is configured for other
-// roles. Used by the customer edit / delete routes below.
+// Strict role check (not the per-user permissions that requirePermission()
+// reads) — for an operation that must always be admin-only no matter what has
+// been granted to individual users. Used by the customer edit / delete routes
+// below.
 const requireAdmin = (req, res, next) => {
     if (req.user.role !== "admin") {
         return res.status(403).json({ message: "This action is restricted to admin accounts." });
@@ -698,7 +715,9 @@ vehicleNoteRouter.delete("/:id/notes/:noteId", requireStaffOrAdmin, async (req, 
     } catch (err) { next(err); }
 });
 
-vehicleNoteRouter.post("/:id/gallery", requireAuth, async (req, res, next) => {
+// Adding / removing a gallery photo changes the vehicle, so it needs the same
+// permission as the Edit button.
+vehicleNoteRouter.post("/:id/gallery", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
         const { image } = req.body;
         if (!image) return res.status(400).json({ message: "image is required." });
@@ -712,7 +731,7 @@ vehicleNoteRouter.post("/:id/gallery", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-vehicleNoteRouter.delete("/:id/gallery", requireAuth, async (req, res, next) => {
+vehicleNoteRouter.delete("/:id/gallery", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
         const { image } = req.body;
         if (!image) return res.status(400).json({ message: "image is required." });
@@ -726,7 +745,7 @@ vehicleNoteRouter.delete("/:id/gallery", requireAuth, async (req, res, next) => 
     } catch (err) { next(err); }
 });
 
-vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
+vehicleNoteRouter.delete("/:id", requireAuth, requirePermission("vehicle-notes.delete"), async (req, res, next) => {
     try {
         const vehicle = await VehicleNote.findByIdAndDelete(req.params.id);
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
@@ -737,8 +756,8 @@ vehicleNoteRouter.delete("/:id", requireAuth, async (req, res, next) => {
 // --- Customer Routes ---
 // Customers that a vehicle note can be attached to (see models/Customer.js).
 // Everything here is personal data, so the whole router is limited to the
-// staff and admin roles (strict role check, not the configurable Permission
-// matrix — same reasoning as requireStaffOrAdminOnly above):
+// staff and admin roles (strict role check, not per-user permissions — same
+// reasoning as requireStaffOrAdminOnly above):
 //   - list / add: staff and admin
 //   - edit / delete: admin only
 // Email and phone are unique; a clash is reported per field.
@@ -843,15 +862,15 @@ customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
 // --- Vehicle Lookup Routes (predefined Make/Model/Type dropdown data) ---
 // Backs the cascading Make -> Model -> Type dropdowns on the Vehicle Notes
 // "Add / Edit vehicle" form, and the Make dropdown on the Tire Size Option
-// preset popup. Read access matches vehicle-notes; only staff/admin can
-// replace the table via upload (same restriction as the internal staff notes
-// endpoints above), since an upload wipes and re-populates the whole
-// reference table for every user.
+// preset popup. Read access matches vehicle-notes. Downloading and uploading
+// the whole table are separate per-user permissions
+// (vehicle-notes.database.download / .upload) — an upload wipes and
+// re-populates the reference table for every user, so grant it sparingly.
 //
 // Writing to the reference lists (adding and deleting Makes, Models, Types
 // and Years) is limited to the staff and admin roles — requireStaffOrAdminOnly
-// rather than the configurable Permission matrix, so a custom role created in
-// User Management can never edit the shared lists. The UI gates the same way:
+// rather than per-user permissions, so the shared lists can only ever be
+// edited by staff and admin accounts. The UI gates the same way:
 // see `isStaffOrAdmin` in pages/vehiclenotes.jsx and `canManagePresets` in
 // pages/tiresizeoption.jsx.
 const vehicleLookupRouter = express.Router();
@@ -922,7 +941,7 @@ vehicleLookupRouter.get("/years", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-vehicleLookupRouter.get("/export", async (req, res, next) => {
+vehicleLookupRouter.get("/export", requirePermission("vehicle-notes.database.download"), async (req, res, next) => {
     try {
         const rows = await VehicleLookup.find().sort({ make: 1, model: 1 }).lean();
         const buffer = buildVehicleLookupWorkbook(rows);
@@ -932,7 +951,7 @@ vehicleLookupRouter.get("/export", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-vehicleLookupRouter.post("/import", requireStaffOrAdmin, async (req, res, next) => {
+vehicleLookupRouter.post("/import", requirePermission("vehicle-notes.database.upload"), async (req, res, next) => {
     try {
         const { fileBase64 } = req.body;
         if (!fileBase64 || typeof fileBase64 !== "string") {
@@ -1271,10 +1290,9 @@ plusSizeRouter.post("/search", async (req, res, next) => {
 // Same "base64 .xlsx in the JSON body" shape as /vehicle-lookup/import, and
 // the same buffer-download shape as /vehicle-lookup/export — see
 // utils/oeTireSizeExcel.js. Upload is insert-only (a duplicate width/
-// aspect/rim is left exactly as it is, never overwritten) and restricted to
-// staff/admin, matching how the Tire Size Option library itself is managed;
-// export is available to anyone with plus-size access.
-plusSizeRouter.post("/oe-tiresize/import", requireStaffOrAdminOnly, async (req, res, next) => {
+// aspect/rim is left exactly as it is, never overwritten). Upload and download
+// are each their own per-user permission (plus-size.upload / plus-size.download).
+plusSizeRouter.post("/oe-tiresize/import", requirePermission("plus-size.upload"), async (req, res, next) => {
     try {
         const { fileBase64, fileName } = req.body;
         if (!fileBase64 || typeof fileBase64 !== "string") {
@@ -1286,7 +1304,7 @@ plusSizeRouter.post("/oe-tiresize/import", requireStaffOrAdminOnly, async (req, 
     } catch (err) { next(err); }
 });
 
-plusSizeRouter.get("/oe-tiresize/export", async (req, res, next) => {
+plusSizeRouter.get("/oe-tiresize/export", requirePermission("plus-size.download"), async (req, res, next) => {
     try {
         const rows = await fetchAllOeTireSizesForExport();
         const buffer = buildOeTireSizeWorkbook(rows);
@@ -1318,7 +1336,7 @@ plusSizeRouter.post("/save", async (req, res, next) => {
 const activityRouter = express.Router();
 activityRouter.use(requireAuth);
 
-activityRouter.post("/tire-comparison", async (req, res, next) => {
+activityRouter.post("/tire-comparison", requirePermission("tire-comparison.save"), async (req, res, next) => {
     try {
         const { tireA, tireB, diffPct, summary } = req.body;
         if (!tireA || !tireB) {
@@ -1449,17 +1467,34 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             }
         });
 
-        res.json({
-            totalUsers,
-            totalVehicles,
-            tirePresets,
-            usersByRole,
-            recentVehicles,
-            recentTireComparisons,
-            recentVehicleSearches,
-            recentPlusSizeSaves,
-            reportsSummary: { totalActivity: reportsTotal, last7Days: reportsLast7Days },
-        });
+        // Each dashboard tile has its own permission (dashboard.tile.*). The
+        // data behind a tile is only sent to users who may see that tile —
+        // hiding a card in the UI alone would still leave its numbers in the
+        // API response.
+        const can = (tile) => hasPermission(req.access, `dashboard.tile.${tile}`);
+        const summary = {};
+
+        if (can("total-users")) summary.totalUsers = totalUsers;
+        if (can("vehicle-notes")) summary.totalVehicles = totalVehicles;
+        if (can("tire-presets")) summary.tirePresets = tirePresets;
+        if (can("users-by-role")) summary.usersByRole = usersByRole;
+        if (can("recent-vehicles")) summary.recentVehicles = recentVehicles;
+        if (can("recent-comparisons")) summary.recentTireComparisons = recentTireComparisons;
+        if (can("recent-vehicle-searches")) summary.recentVehicleSearches = recentVehicleSearches;
+        if (can("recent-plus-size")) summary.recentPlusSizeSaves = recentPlusSizeSaves;
+        if (can("reports")) summary.reportsSummary = { totalActivity: reportsTotal, last7Days: reportsLast7Days };
+
+        // The Tire showroom previews the most recently compared size. It gets its
+        // own field so it doesn't depend on (or expose) the comparisons list.
+        if (can("tire-showroom")) {
+            const latest = recentTireComparisons[0]?.data;
+            const tire = latest?.tireB || latest?.tireA;
+            if (tire?.width && tire?.rim) {
+                summary.showroomTire = { width: tire.width, aspect: tire.aspect, rim: tire.rim };
+            }
+        }
+
+        res.json(summary);
     } catch (err) { next(err); }
 });
 
@@ -1518,20 +1553,7 @@ navigationRouter.get("/", (req, res, next) => {
 const appGuideRouter = express.Router();
 appGuideRouter.use(requireAuth);
 
-const requireAppGuideOrTechData = async (req, res, next) => {
-    try {
-        if (req.user?.role === "admin") return next();
-        const doc = await Permission.findOne({ key: "global" }).lean();
-        const allowed = doc?.matrix?.[req.user.role] || [];
-        if (allowed.includes("application-guide") || allowed.includes("tech-data")) {
-            return next();
-        }
-        return res.status(403).json({
-            message: `Access Denied: Your assigned role (${req.user.role}) lacks clearance for 'application-guide' or 'tech-data'.`,
-        });
-    } catch (err) { next(err); }
-};
-appGuideRouter.use(requireAppGuideOrTechData);
+appGuideRouter.use(requireAnyPermission("application-guide", "tech-data"));
 const APP_GUIDE_CACHE_TTL_SECONDS = Number(process.env.APP_GUIDE_CACHE_TTL_SECONDS) || 3600;
 
 appGuideRouter.get("/years", async (req, res, next) => {
@@ -1624,7 +1646,8 @@ const TECH_DATA_CSV_COLUMNS = [
     { key: "bigBrake", label: "Big Brake" },
 ];
 
-appGuideRouter.get("/export", async (req, res, next) => {
+// The Tech Data "CSV import / export" tab: both directions need its permission.
+appGuideRouter.get("/export", requirePermission("tech-data.csv-tab"), async (req, res, next) => {
     try {
         const { year, make, model } = req.query;
         const query = {};
@@ -1641,7 +1664,7 @@ appGuideRouter.get("/export", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-appGuideRouter.post("/import", async (req, res, next) => {
+appGuideRouter.post("/import", requirePermission("tech-data.csv-tab"), async (req, res, next) => {
     try {
         const { csv } = req.body;
         if (!csv || typeof csv !== "string") {
@@ -1772,7 +1795,7 @@ const REPORT_EXPORTERS = {
     },
 };
 
-reportsRouter.get("/export", async (req, res, next) => {
+reportsRouter.get("/export", requirePermission("reports.download"), async (req, res, next) => {
     try {
         const { type } = req.query;
         const exporter = REPORT_EXPORTERS[type];

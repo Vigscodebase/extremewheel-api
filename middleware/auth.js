@@ -1,7 +1,8 @@
 // middleware/auth.js
+import mongoose from "mongoose";
 import User from "../models/User.js";
-import Permission from "../models/Permission.js";
 import { signToken, verifyToken } from "../utils/jwt.js";
+import { ancestorsOf, isKnownPermission } from "../config/permissionCatalog.js";
 
 // const RENEW_THRESHOLD_SECONDS = Number(process.env.JWT_RENEW_THRESHOLD_SECONDS) || 5 * 60; // rolling-refresh window
 
@@ -65,35 +66,85 @@ export const requireAuth = async (req, res, next) => {
 };
 
 /**
- * Dynamic validation matching database configuration maps
- * @param {string} requiredKey - The page view or element control key (e.g., "user-management")
+ * Per-user access, looked up FRESH from the database on every guarded request
+ * (and cached on `req.access` so stacked guards only hit the DB once).
+ *
+ * Permissions belong to the user's email, and the token is deliberately NOT
+ * trusted for them: tokens never expire, so a token minted before an admin
+ * changed this user's email, role or permissions — or deleted the account —
+ * would otherwise keep working with the old grants. Looking the user up by
+ * _id each time means those changes take effect on the very next request, and
+ * a stale token can never borrow the permissions of whoever later owns its old
+ * email address.
+ *
+ * Resolves to null when the account no longer exists.
+ */
+export async function loadAccess(req) {
+  if (req.access) return req.access;
+
+  const id = req.user?._id || req.user?.id;
+  if (!id || !mongoose.isValidObjectId(id)) return null;
+
+  const fresh = await User.findById(id).select("email role permissions").lean();
+  if (!fresh) return null;
+
+  req.access = {
+    email: fresh.email,
+    role: fresh.role,
+    // The one role-based rule that remains: an admin account is the master
+    // account and always holds every permission (so nobody can be locked out
+    // of User Management). Everything else is purely per-user grants.
+    isAdmin: fresh.role === "admin",
+    permissions: new Set(fresh.permissions || []),
+  };
+  return req.access;
+}
+
+/**
+ * True when the user holds `key` AND every ancestor of it (an element
+ * permission is meaningless without the page / card it lives in).
+ */
+export function hasPermission(access, key) {
+  if (!access) return false;
+  if (access.isAdmin) return true;
+  return access.permissions.has(key) && ancestorsOf(key).every((a) => access.permissions.has(a));
+}
+
+// Fail at startup (not at request time) if a route is guarded with a key that
+// isn't in the catalog — a typo there would otherwise silently lock everyone
+// out of the route, or worse, be mistaken for "no guard".
+function assertKnownKeys(keys) {
+  const unknown = keys.filter((k) => !isKnownPermission(k));
+  if (unknown.length) {
+    throw new Error(`requirePermission: unknown permission key(s): ${unknown.join(", ")}`);
+  }
+}
+
+const notAuthorized = (res) =>
+  res.status(401).json({ message: "Not authorized, this account no longer exists." });
+
+/**
+ * Guard a route by a permission key — a page ("user-management") or an element
+ * ("vehicle-notes.delete"). Admin accounts always pass.
+ * @param {string} requiredKey
  */
 export function requirePermission(requiredKey) {
+  assertKnownKeys([requiredKey]);
+
   return async (req, res, next) => {
     try {
       if (!req.user) {
         return res.status(401).json({ message: "Not authenticated." });
       }
 
-      const userRole = req.user.role;
+      const access = await loadAccess(req);
+      if (!access) return notAuthorized(res);
 
-      // Master Account Bypass
-      if (userRole === "admin") return next();
+      if (hasPermission(access, requiredKey)) return next();
 
-      // Retrieve global access layout matrix
-      const doc = await Permission.findOne({ key: "global" }).lean();
-      if (!doc) {
-        return res.status(500).json({ message: "Authorization system misconfigured. Access maps unavailable." });
-      }
-
-      const allowedPages = doc.matrix?.[userRole] || [];
-      if (!allowedPages.includes(requiredKey)) {
-        return res.status(403).json({
-          message: `Access Denied: Your assigned role (${userRole}) lacks clearance for '${requiredKey}'.`
-        });
-      }
-
-      next();
+      return res.status(403).json({
+        message: `Access Denied: your account doesn't have permission for '${requiredKey}'.`,
+      });
     } catch (err) {
       next(err);
     }
@@ -101,36 +152,28 @@ export function requirePermission(requiredKey) {
 }
 
 /**
- * Same as requirePermission, but passes if the role holds ANY of the given
- * page keys. For read-only data that more than one page depends on — e.g. the
+ * Same as requirePermission, but passes if the user holds ANY of the given
+ * keys. For read-only data that more than one page depends on — e.g. the
  * Make list feeds both Vehicle Notes and Tire Size Option.
- * @param {...string} requiredKeys - page/element keys, any one of which is enough
+ * @param {...string} requiredKeys
  */
 export function requireAnyPermission(...requiredKeys) {
+  assertKnownKeys(requiredKeys);
+
   return async (req, res, next) => {
     try {
       if (!req.user) {
         return res.status(401).json({ message: "Not authenticated." });
       }
 
-      const userRole = req.user.role;
+      const access = await loadAccess(req);
+      if (!access) return notAuthorized(res);
 
-      // Master Account Bypass
-      if (userRole === "admin") return next();
+      if (requiredKeys.some((key) => hasPermission(access, key))) return next();
 
-      const doc = await Permission.findOne({ key: "global" }).lean();
-      if (!doc) {
-        return res.status(500).json({ message: "Authorization system misconfigured. Access maps unavailable." });
-      }
-
-      const allowedPages = doc.matrix?.[userRole] || [];
-      if (!requiredKeys.some((key) => allowedPages.includes(key))) {
-        return res.status(403).json({
-          message: `Access Denied: Your assigned role (${userRole}) lacks clearance for '${requiredKeys.join("' or '")}'.`
-        });
-      }
-
-      next();
+      return res.status(403).json({
+        message: `Access Denied: your account doesn't have permission for '${requiredKeys.join("' or '")}'.`,
+      });
     } catch (err) {
       next(err);
     }
