@@ -19,6 +19,7 @@ import User from "./models/User.js";
 import TireOption from "./models/TireOption.js";
 import VehicleNote from "./models/VehicleNote.js";
 import Customer from "./models/Customer.js";
+import SavedComparison from "./models/SavedComparison.js";
 import VehicleLookup from "./models/VehicleLookup.js";
 import VehicleLookupYear from "./models/VehicleLookupYear.js";
 import VehicleLookupMake from "./models/VehicleLookupMake.js";
@@ -844,8 +845,8 @@ customerRouter.put("/:id", requireAdmin, async (req, res, next) => {
     }
 });
 
-// Deleting a customer detaches them from any vehicle notes that pointed at
-// them (the vehicles themselves are kept) so nothing is left referencing a
+// Deleting a customer detaches them from any vehicle notes (and saved tire
+// comparisons) that pointed at them (the vehicles themselves are kept) so nothing is left referencing a
 // customer that no longer exists.
 customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
     try {
@@ -855,7 +856,75 @@ customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
         const customer = await Customer.findByIdAndDelete(req.params.id);
         if (!customer) return res.status(404).json({ message: "Customer not found." });
         const detached = await VehicleNote.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
-        res.json({ success: true, detachedVehicles: detached.modifiedCount ?? 0 });
+        // Saved tire comparisons can point at a customer too — detach those as well.
+        const detachedComparisons = await SavedComparison.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
+        res.json({
+            success: true,
+            detachedVehicles: detached.modifiedCount ?? 0,
+            detachedComparisons: detachedComparisons.modifiedCount ?? 0,
+        });
+    } catch (err) { next(err); }
+});
+
+// --- Saved Comparison Routes ---
+// Backs the "Save comparison" popup on the Tire Size Comparison page. Stored in
+// its own collection (models/SavedComparison.js), separate from Vehicle Notes.
+// The vehicle details use the same Make / Model / Type / Year lists and the
+// same Customer documents as Vehicle Notes, and are validated the same way:
+// vehicle name, make, model and type are required; the customer is optional
+// and, like on Vehicle Notes, only staff and admin may attach one.
+const savedComparisonRouter = express.Router();
+savedComparisonRouter.use(requireAuth, requirePermission("tire-comparison.save"));
+
+// One side of the comparison: width / aspect / rim must all be positive numbers.
+function parseComparisonTire(tire) {
+    if (!tire || typeof tire !== "object") return null;
+    const out = { width: Number(tire.width), aspect: Number(tire.aspect), rim: Number(tire.rim) };
+    return Object.values(out).every((n) => Number.isFinite(n) && n > 0) ? out : null;
+}
+
+savedComparisonRouter.post("/", async (req, res, next) => {
+    try {
+        const { name, make, model, type, year, engine, tyre, gallery, customer, tireA, tireB, diffPct } = req.body;
+
+        if (!name || !make || !model || !type) {
+            return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
+        }
+        const a = parseComparisonTire(tireA);
+        const b = parseComparisonTire(tireB);
+        if (!a || !b) {
+            return res.status(400).json({ message: "Both tires need a valid width, aspect and rim." });
+        }
+
+        const customerField = await resolveCustomerField(req, customer);
+        if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
+
+        // normalizeSpec is the Vehicle Notes helper: tolerant of a blank engine
+        // or partly-filled tyre numbers.
+        const spec = normalizeSpec({ engine, tyre });
+        const diff = Number(diffPct);
+
+        const saved = await SavedComparison.create({
+            name,
+            make,
+            model,
+            type,
+            year,
+            engine: spec?.engine ?? "",
+            tyre: spec?.tyre,
+            gallery: Array.isArray(gallery) ? gallery.filter((g) => typeof g === "string") : [],
+            ...(customerField.id && { customer: customerField.id }),
+            comparison: {
+                tireA: a,
+                tireB: b,
+                diffPct: Number.isFinite(diff) ? diff : undefined,
+                summary: `${a.width}/${a.aspect}R${a.rim} vs ${b.width}/${b.aspect}R${b.rim}`,
+            },
+            createdBy: req.user._id,
+        });
+        if (canViewCustomers(req)) await saved.populate("customer", "fullName email phone");
+        else saved.customer = undefined;
+        res.status(201).json({ comparison: saved });
     } catch (err) { next(err); }
 });
 
@@ -883,7 +952,7 @@ const VEHICLE_LOOKUP_CACHE_TTL_SECONDS = Number(process.env.VEHICLE_LOOKUP_CACHE
 // but not Vehicle Notes can still fill in the preset form's Make dropdown.
 // Merges the Make/Model/Type table with makes that were added on their own
 // (see models/VehicleLookupMake.js).
-vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-options"), async (req, res, next) => {
+vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-options", "tire-comparison.save"), async (req, res, next) => {
     try {
         const makes = await cached("vehicle-lookup:makes", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, async () => {
             const [fromLookup, standalone] = await Promise.all([
@@ -896,7 +965,16 @@ vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-not
     } catch (err) { next(err); }
 });
 
-vehicleLookupRouter.use(requireAuth, requirePermission("vehicle-notes"));
+// The Save comparison popup on the Tire Size Comparison page uses the same
+// Make / Model / Type / Year dropdowns, so those four read-only lists are also
+// readable with "tire-comparison.save". Everything else on this router
+// (export, import, quick-add, delete) still needs Vehicle Notes access.
+const lookupReadGuard = requireAnyPermission("vehicle-notes", "tire-comparison.save");
+const lookupFullGuard = requirePermission("vehicle-notes");
+vehicleLookupRouter.use(requireAuth, (req, res, next) => {
+    const isListRead = req.method === "GET" && ["/models", "/types", "/years"].includes(req.path);
+    return (isListRead ? lookupReadGuard : lookupFullGuard)(req, res, next);
+});
 
 vehicleLookupRouter.get("/models", async (req, res, next) => {
     try {
@@ -1818,6 +1896,7 @@ app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
 app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/customers", customerRouter);
+app.use("/saved-comparisons", savedComparisonRouter);
 app.use("/vehicle-lookup", vehicleLookupRouter);
 app.use("/tire-options", tireOptionRouter);
 app.use("/plus-size", plusSizeRouter);
