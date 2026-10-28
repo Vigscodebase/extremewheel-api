@@ -845,9 +845,10 @@ customerRouter.put("/:id", requireAdmin, async (req, res, next) => {
     }
 });
 
-// Deleting a customer detaches them from any vehicle notes (and saved tire
-// comparisons) that pointed at them (the vehicles themselves are kept) so nothing is left referencing a
-// customer that no longer exists.
+// Deleting a customer detaches them from any vehicle notes, saved tire
+// comparisons and Tire Size Option presets that pointed at them (the vehicles
+// and presets themselves are kept) so nothing is left referencing a customer
+// that no longer exists.
 customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -858,10 +859,13 @@ customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
         const detached = await VehicleNote.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
         // Saved tire comparisons can point at a customer too — detach those as well.
         const detachedComparisons = await SavedComparison.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
+        // Tire Size Option presets can point at a customer too — detach those as well.
+        const detachedPresets = await TireOption.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
         res.json({
             success: true,
             detachedVehicles: detached.modifiedCount ?? 0,
             detachedComparisons: detachedComparisons.modifiedCount ?? 0,
+            detachedPresets: detachedPresets.modifiedCount ?? 0,
         });
     } catch (err) { next(err); }
 });
@@ -874,7 +878,7 @@ customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
 // vehicle name, make, model and type are required; the customer is optional
 // and, like on Vehicle Notes, only staff and admin may attach one.
 const savedComparisonRouter = express.Router();
-savedComparisonRouter.use(requireAuth, requirePermission("tire-comparison.save"));
+savedComparisonRouter.use(requireAuth);
 
 // One side of the comparison: width / aspect / rim must all be positive numbers.
 function parseComparisonTire(tire) {
@@ -883,7 +887,24 @@ function parseComparisonTire(tire) {
     return Object.values(out).every((n) => Number.isFinite(n) && n > 0) ? out : null;
 }
 
-savedComparisonRouter.post("/", async (req, res, next) => {
+// Lists every saved comparison (newest first) for the "Saved comparisons"
+// table at the bottom of the Tire Size Comparison page. Anyone who can open
+// that page may read it; saving still needs "tire-comparison.save" (below).
+// The photo gallery is left out — base64 images would make the list huge and
+// the table doesn't show them. As on Vehicle Notes, the customer (name, email,
+// phone) is personal data and is only sent to staff and admin.
+savedComparisonRouter.get("/", requirePermission("tire-comparison"), async (req, res, next) => {
+    try {
+        let query = SavedComparison.find().select("-gallery").sort({ createdAt: -1 });
+        query = canViewCustomers(req)
+            ? query.populate("customer", "fullName email phone")
+            : query.select("-customer");
+        const comparisons = await query;
+        res.json({ comparisons });
+    } catch (err) { next(err); }
+});
+
+savedComparisonRouter.post("/", requirePermission("tire-comparison.save"), async (req, res, next) => {
     try {
         const { name, make, model, type, year, engine, tyre, gallery, customer, tireA, tireB, diffPct } = req.body;
 
@@ -1153,16 +1174,25 @@ vehicleLookupRouter.delete("/year", requireStaffOrAdminOnly, async (req, res, ne
 // read it).
 const tireOptionRouter = express.Router();
 
+// The preset's optional customer is one of the shared customers (the same
+// /customers list Vehicle Notes uses); only the link is stored on the preset.
+// Customer name / email / phone are personal data: only staff and admin get the
+// populated customer. Everyone else (the Calculator, Comparison and Plus Size
+// pages read this list too) gets the preset without it.
 tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
     try {
-        const options = await TireOption.find().sort({ createdAt: -1 });
+        let query = TireOption.find().sort({ createdAt: -1 });
+        query = canViewCustomers(req)
+            ? query.populate("customer", "fullName email phone")
+            : query.select("-customer");
+        const options = await query;
         res.json({ options });
     } catch (err) { next(err); }
 });
 
 tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {
-        const { label, make, width, aspect, rim } = req.body;
+        const { label, make, width, aspect, rim, customer } = req.body;
         const cleanMake = typeof make === "string" ? make.trim() : "";
         // The Make is the preset's name; `label` is only honored as a
         // fallback for a caller that doesn't send a make.
@@ -1170,7 +1200,18 @@ tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res
         if (!cleanLabel || !width || !aspect || !rim) {
             return res.status(400).json({ message: "All fields are required." });
         }
-        const option = await TireOption.create({ label: cleanLabel, make: cleanMake, width, aspect, rim, createdBy: req.user._id });
+        const customerField = await resolveCustomerField(req, customer);
+        if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
+
+        const option = await TireOption.create({
+            label: cleanLabel,
+            make: cleanMake,
+            width,
+            aspect,
+            rim,
+            ...(customerField.id && { customer: customerField.id }),
+            createdBy: req.user._id,
+        });
 
         // Keep oe_tiresize in sync with the Tire Size Option library — insert
         // only (see upsertOeTireSize), so a size that's already on file from
@@ -1181,13 +1222,17 @@ tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res
             { sourceRef: option._id, label: option.label }
         ).catch((err) => logToFile(`[OeTireSize] sync from TireOption create failed: ${err.message}`));
 
+        await option.populate("customer", "fullName email phone");
         res.status(201).json({ option });
     } catch (err) { next(err); }
 });
 
 tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {
-        const { label, make, width, aspect, rim } = req.body;
+        const { label, make, width, aspect, rim, customer } = req.body;
+        const customerField = await resolveCustomerField(req, customer);
+        if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
+
         const update = {};
         if (make !== undefined) update.make = typeof make === "string" ? make.trim() : "";
         // Name follows the Make; `label` on its own only applies when no make is being set.
@@ -1196,6 +1241,8 @@ tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, r
         if (width) update.width = width;
         if (aspect) update.aspect = aspect;
         if (rim) update.rim = rim;
+        if (customerField.id) update.customer = customerField.id;
+        if (customerField.clear) update.$unset = { customer: 1 };
 
         const option = await TireOption.findByIdAndUpdate(req.params.id, update, { new: true });
         if (!option) return res.status(404).json({ message: "Preset not found." });
@@ -1208,6 +1255,7 @@ tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, r
             { sourceRef: option._id, label: option.label }
         ).catch((err) => logToFile(`[OeTireSize] sync from TireOption update failed: ${err.message}`));
 
+        await option.populate("customer", "fullName email phone");
         res.json({ option });
     } catch (err) { next(err); }
 });
@@ -1473,7 +1521,7 @@ activityRouter.get("/suggestions", async (req, res, next) => {
         }
 
         const [presets, comparisons, plusSizeSaves, vehicles] = await Promise.all([
-            TireOption.find({ width, aspect, rim }).limit(6).lean(),
+            TireOption.find({ width, aspect, rim }).select("-customer").limit(6).lean(),
             RecentActivity.find({
                 type: "tire-comparison",
                 $or: [
