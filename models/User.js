@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { searchTokensPlugin } from "../utils/searchTokens.js";
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -66,6 +67,20 @@ userSchema.pre("save", async function () {
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
+
+// --- Search & pagination indexes -------------------------------------------
+// (User.createIndexes() runs at startup in server.js, so these are built
+// automatically; scripts/search-indexes.mongosh.js creates the same ones.)
+userSchema.plugin(searchTokensPlugin, {
+  watch: ["name", "email"],
+  fields: (get) => [get("name"), get("email")],
+});
+userSchema.index({ createdAt: -1, _id: -1 }, { name: "us_created_idx" });
+userSchema.index({ searchTokens: 1, createdAt: -1, _id: -1 }, { name: "us_search_tokens_idx" });
+userSchema.index(
+  { name: "text", email: "text" },
+  { name: "us_text_idx", weights: { name: 10, email: 5 }, default_language: "english" }
+);
 
 const User = mongoose.model("User", userSchema);
 

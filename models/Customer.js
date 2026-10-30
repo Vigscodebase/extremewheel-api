@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { searchTokensPlugin } from "../utils/searchTokens.js";
 
 const { Schema, model } = mongoose;
 
@@ -40,5 +41,13 @@ const customerSchema = new Schema(
 
 // Case-insensitive name lookups / sorting for the dropdown.
 customerSchema.index({ fullName: 1 });
+
+// Customer-name search on Vehicle Notes / Saved Comparisons / Tire Size Option
+// resolves the matching customers through this multikey prefix index first.
+customerSchema.plugin(searchTokensPlugin, {
+  watch: ["fullName"],
+  fields: (get) => [get("fullName")],
+});
+customerSchema.index({ searchTokens: 1 }, { name: "cu_search_tokens_idx" });
 
 export default model("Customer", customerSchema);

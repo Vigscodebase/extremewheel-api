@@ -37,6 +37,8 @@ import { tireToleranceLimits } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
 import { parseCustomerInput } from "./utils/customerFields.js";
 import { upsertOeTireSize } from "./utils/oeTireSizeService.js";
+import { keysetPage, suggest, pageRoute, parseLimit, cleanQuery, cleanString } from "./utils/pagination.js";
+import { queryTerms } from "./utils/searchTokens.js";
 import { importOeTireSizeWorkbook, buildOeTireSizeWorkbook, fetchAllOeTireSizesForExport } from "./utils/oeTireSizeExcel.js";
 import {
     importVehicleLookupWorkbook,
@@ -60,6 +62,13 @@ const __dirname = path.dirname(__filename);
 app.use(compression());
 app.use(helmet());
 
+// Uploaded vehicle photos (/uploads/vehicle-notes/<hash>.webp). Nginx proxies
+// /uploads/ here, so Express must serve the folder. Registered BEFORE the
+// request logger and the API rate limiter so a grid of thumbnails doesn't eat
+// the 300 req/min budget. Set UPLOAD_DIR in .env if photos live outside server/uploads.
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
+app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", immutable: true, index: false }));
+
 // CORS is opt-in: unset CORS_ORIGINS (the default) keeps the current
 // same-origin-only behavior exactly as before. Set a comma-separated list
 // in .env to allow specific browser origins (e.g. a separate marketing site
@@ -74,6 +83,26 @@ if (corsOrigins.length > 0) {
     app.use(cors({ origin: corsOrigins, credentials: true }));
 }
 
+// Request logger middleware. Registered BEFORE express.json() on purpose: it
+// used to sit after it, so a request whose body was still uploading (or got cut
+// off) never produced a START line, which made a failing save look like the
+// request never arrived. Also logs aborted uploads.
+app.use((req, res, next) => {
+    const start = Date.now();
+    const route = `${req.method} ${req.originalUrl}`;
+    logToFile(`[API] START ${route}`);
+
+    res.on("finish", () => {
+        const duration = Date.now() - start;
+        const msg = `[API] END   ${route} - ${res.statusCode} (${duration}ms)`;
+        logToFile(msg);
+    });
+    res.on("close", () => {
+        if (!res.writableFinished) logToFile(`[API] ABORT ${route} - client closed the connection after ${Date.now() - start}ms`);
+    });
+    next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.set('trust proxy', 1);
 
@@ -87,19 +116,6 @@ const apiLimiter = rateLimit({
 });
 app.use(apiLimiter);
 
-// Request logger middleware
-app.use((req, res, next) => {
-    const start = Date.now();
-    const route = `${req.method} ${req.originalUrl}`;
-    logToFile(`[API] START ${route}`);
-
-    res.on("finish", () => {
-        const duration = Date.now() - start;
-        const msg = `[API] END   ${route} - ${res.statusCode} (${duration}ms)`;
-        logToFile(msg);
-    });
-    next();
-});
 
 const initializeApp = async () => {
     await connectDB();
@@ -338,6 +354,39 @@ userRouter.get("/", requireAuth, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// Paginated + searchable list for the Users tab (cursor based — see
+// utils/pagination.js). The permissions screen still uses GET / above.
+//   GET /users/page?q=&limit=10&cursor=...
+userRouter.get("/page", pageRoute(async (req, res) => {
+    const result = await keysetPage({
+        Model: User,
+        scope: "users",
+        userId: req.user._id,
+        q: cleanQuery(req.query.q),
+        exact: parseExact(req.query.exact),
+        limit: parseLimit(req.query.limit),
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+        select: "name email role createdAt", // the table needs nothing else (no permissions array, no password)
+        withTotal: true,
+    });
+    res.json(result);
+}));
+
+// Type-ahead for the search box: GET /users/suggest?q=jo
+userRouter.get("/suggest", pageRoute(async (req, res) => {
+    const suggestions = await suggest({
+        Model: User,
+        q: cleanQuery(req.query.q),
+        select: "name email",
+        candidates: (u) => [
+            { text: u.name, kind: "name" },
+            { text: u.email, kind: "email" },
+        ],
+    });
+    res.set("Cache-Control", "private, max-age=30");
+    res.json({ suggestions });
+}));
+
 userRouter.post("/", requireAuth, async (req, res, next) => {
     try {
         const { name, email, password, role } = req.body;
@@ -504,6 +553,105 @@ vehicleNoteRouter.get("/", requireAuth, async (req, res, next) => {
         res.json({ vehicles });
     } catch (err) { next(err); }
 });
+
+// --- Search / filter helpers shared by the paginated lists below --------------
+// (Vehicle Notes, Saved Comparisons, Tire Size Option.)
+
+// Ids of the customers whose name matches the search box (staff / admin only —
+// everyone else can't search by customer). Uses the multikey prefix index on
+// Customer.searchTokens, so it stays cheap however many customers there are.
+async function matchingCustomerIds(req, q, exact = false) {
+    if (!canViewCustomers(req)) return [];
+    const terms = queryTerms(q, { exact });
+    if (!terms.length) return [];
+    const rows = await Customer.find({ searchTokens: { $all: terms } }).select("_id").limit(200).lean();
+    return rows.map((r) => r._id);
+}
+
+async function customerSuggestions(q) {
+    const terms = queryTerms(q);
+    if (!terms.length) return [];
+    const rows = await Customer.find({ searchTokens: { $all: terms } }).select("fullName").limit(5).lean();
+    return rows.map((c) => ({ text: c.fullName, kind: "customer" }));
+}
+
+// "1" when the search text came from clicking a suggestion: match whole words
+// ("Customer Name 2" must not also return "Customer Name 20"), not prefixes.
+const parseExact = (raw) => raw === "1";
+
+// Year is stored as free text; a 4-digit value is what the Year filters offer.
+const parseYearParam = (raw) => (/^\d{4}$/.test(cleanString(raw)) ? cleanString(raw) : "");
+
+// Make / Model / Type / Customer / Year-range filters, as the raw params (these
+// seal into the cursor) and the equivalent MongoDB filter.
+function vehicleListFilters(query, req) {
+    const params = {};
+    const filters = {};
+    for (const key of ["make", "model", "type"]) {
+        const value = cleanString(query[key]);
+        if (value) { params[key] = value; filters[key] = value; }
+    }
+    const customer = cleanString(query.customer);
+    if (customer && canViewCustomers(req) && mongoose.isValidObjectId(customer)) {
+        params.customer = customer;
+        filters.customer = customer;
+    }
+    const yearFrom = parseYearParam(query.yearFrom);
+    const yearTo = parseYearParam(query.yearTo);
+    if (yearFrom || yearTo) {
+        params.yearFrom = yearFrom;
+        params.yearTo = yearTo;
+        filters.year = { ...(yearFrom && { $gte: yearFrom }), ...(yearTo && { $lte: yearTo }) };
+    }
+    return { params, filters };
+}
+
+// Paginated + searchable vehicle list (cursor based — see utils/pagination.js).
+// GET /vehicle-notes/page?q=&make=&model=&type=&customer=&yearFrom=&yearTo=&limit=10&cursor=...
+// Must stay above GET /:id so "page" isn't read as a vehicle id.
+vehicleNoteRouter.get("/page", pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const { params, filters } = vehicleListFilters(req.query, req);
+    const exact = parseExact(req.query.exact);
+    const customerIds = await matchingCustomerIds(req, q, exact);
+    const staff = canViewCustomers(req);
+    const result = await keysetPage({
+        Model: VehicleNote,
+        scope: "vehicle-notes",
+        userId: req.user._id,
+        q,
+        exact,
+        params,
+        filters,
+        searchAlso: customerIds.length ? [{ customer: { $in: customerIds } }] : [],
+        limit: parseLimit(req.query.limit),
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+        select: staff ? undefined : "-customer",
+        populate: staff ? [["customer", "fullName email phone"]] : [],
+        withTotal: true,
+    });
+    res.json(result);
+}));
+
+// Type-ahead for the search box: GET /vehicle-notes/suggest?q=toy
+vehicleNoteRouter.get("/suggest", pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const suggestions = await suggest({
+        Model: VehicleNote,
+        q,
+        select: "name make model year",
+        caps: { make: 2, model: 2, year: 2, customer: 3 },
+        candidates: (v) => [
+            { text: v.name, kind: "vehicle" },
+            { text: v.make, kind: "make" },
+            { text: v.model, kind: "model" },
+            { text: v.year, kind: "year" },
+        ],
+        extra: canViewCustomers(req) ? () => customerSuggestions(q) : undefined,
+    });
+    res.set("Cache-Control", "private, max-age=30");
+    res.json({ suggestions });
+}));
 
 // Single vehicle — backs the read-only detail page (/vehicle-notes/:id).
 // Internal staff notes and the creator's name are staff/admin only; anyone
@@ -904,6 +1052,83 @@ savedComparisonRouter.get("/", requirePermission("tire-comparison"), async (req,
     } catch (err) { next(err); }
 });
 
+// Paginated + searchable version of the list above (cursor based — see
+// utils/pagination.js); this is what the Saved comparisons table uses.
+// GET /saved-comparisons/page?q=&make=&model=&type=&customer=&yearFrom=&yearTo=&limit=10&cursor=...
+savedComparisonRouter.get("/page", requirePermission("tire-comparison"), pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const { params, filters } = vehicleListFilters(req.query, req);
+    const exact = parseExact(req.query.exact);
+    const customerIds = await matchingCustomerIds(req, q, exact);
+    const staff = canViewCustomers(req);
+    const result = await keysetPage({
+        Model: SavedComparison,
+        scope: "saved-comparisons",
+        userId: req.user._id,
+        q,
+        exact,
+        params,
+        filters,
+        searchAlso: customerIds.length ? [{ customer: { $in: customerIds } }] : [],
+        limit: parseLimit(req.query.limit),
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+        select: staff ? "-gallery" : "-gallery -customer",
+        populate: staff ? [["customer", "fullName email phone"]] : [],
+        withTotal: true,
+    });
+    res.json(result);
+}));
+
+// Type-ahead for the search box: GET /saved-comparisons/suggest?q=hil
+savedComparisonRouter.get("/suggest", requirePermission("tire-comparison"), pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const suggestions = await suggest({
+        Model: SavedComparison,
+        q,
+        select: "name make model year comparison.tireA comparison.tireB",
+        caps: { make: 2, model: 2, year: 2, size: 2, customer: 3 },
+        candidates: (c) => {
+            const size = (t) => (t?.width ? { text: `${t.width}/${t.aspect} R${t.rim}`, kind: "size" } : null);
+            return [
+                { text: c.name, kind: "vehicle" },
+                { text: c.make, kind: "make" },
+                { text: c.model, kind: "model" },
+                { text: c.year, kind: "year" },
+                size(c.comparison?.tireA),
+                size(c.comparison?.tireB),
+            ];
+        },
+        extra: canViewCustomers(req) ? () => customerSuggestions(q) : undefined,
+    });
+    res.set("Cache-Control", "private, max-age=30");
+    res.json({ suggestions });
+}));
+
+// Values for the filter dropdowns (the table is paged, so they can no longer be
+// read off the rows): Make always, Model once a Make is picked, Type once a
+// Make + Model are picked, and the years on file. Each is an index-only
+// `distinct` (DISTINCT_SCAN over the compound indexes), so it stays cheap; the
+// client also caches the result.
+// GET /saved-comparisons/facets?make=&model=
+savedComparisonRouter.get("/facets", requirePermission("tire-comparison"), pageRoute(async (req, res) => {
+    const make = cleanString(req.query.make);
+    const model = make ? cleanString(req.query.model) : "";
+    const [makes, models, types, years] = await Promise.all([
+        SavedComparison.distinct("make"),
+        make ? SavedComparison.distinct("model", { make }) : [],
+        make && model ? SavedComparison.distinct("type", { make, model }) : [],
+        SavedComparison.distinct("year"),
+    ]);
+    const text = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+    res.set("Cache-Control", "private, max-age=30");
+    res.json({
+        makes: makes.filter(Boolean).sort(text),
+        models: models.filter(Boolean).sort(text),
+        types: types.filter(Boolean).sort(text),
+        years: years.map(Number).filter((y) => Number.isFinite(y) && y > 0).sort((a, b) => a - b),
+    });
+}));
+
 savedComparisonRouter.post("/", requirePermission("tire-comparison.save"), async (req, res, next) => {
     try {
         const { name, make, model, type, year, engine, tyre, gallery, customer, tireA, tireB, diffPct } = req.body;
@@ -1189,6 +1414,57 @@ tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
         res.json({ options });
     } catch (err) { next(err); }
 });
+
+// Paginated + searchable version of the list above (cursor based — see
+// utils/pagination.js); this is what the Tire Size Option page uses. The full
+// list above stays for the Calculator / Comparison / Plus Size pickers.
+// GET /tire-options/page?q=&customer=&limit=10&cursor=...
+tireOptionRouter.get("/page", requireAuth, requirePermission("tire-options"), pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const staff = canViewCustomers(req);
+    const params = {};
+    const filters = {};
+    const customer = cleanString(req.query.customer);
+    if (customer && staff && mongoose.isValidObjectId(customer)) {
+        params.customer = customer;
+        filters.customer = customer;
+    }
+    const exact = parseExact(req.query.exact);
+    const customerIds = await matchingCustomerIds(req, q, exact);
+    const result = await keysetPage({
+        Model: TireOption,
+        scope: "tire-options",
+        userId: req.user._id,
+        q,
+        exact,
+        params,
+        filters,
+        searchAlso: customerIds.length ? [{ customer: { $in: customerIds } }] : [],
+        limit: parseLimit(req.query.limit),
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+        select: staff ? undefined : "-customer",
+        populate: staff ? [["customer", "fullName email phone"]] : [],
+        withTotal: true,
+    });
+    res.json(result);
+}));
+
+// Type-ahead for the search box: GET /tire-options/suggest?q=toy
+tireOptionRouter.get("/suggest", requireAuth, requirePermission("tire-options"), pageRoute(async (req, res) => {
+    const q = cleanQuery(req.query.q);
+    const suggestions = await suggest({
+        Model: TireOption,
+        q,
+        select: "label width aspect rim",
+        candidates: (t) => [
+            { text: t.label, kind: "preset" },
+            { text: `${t.width}/${t.aspect} R${t.rim}`, kind: "size" },
+        ],
+        extra: canViewCustomers(req) ? () => customerSuggestions(q) : undefined,
+    });
+    res.set("Cache-Control", "private, max-age=30");
+    res.json({ suggestions });
+}));
 
 tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
     try {

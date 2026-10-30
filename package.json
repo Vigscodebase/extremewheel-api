@@ -14,7 +14,10 @@
     "worker:app-guide": "node workers/appGuideWorker.js",
     "import:tire-sizes": "node scripts/importTireSizes.js",
     "worker:tire-sizes": "node workers/tireSizesWorker.js",
-    "migrate:permissions": "node scripts/migrateRolePermissionsToUsers.js"
+    "migrate:permissions": "node scripts/migrateRolePermissionsToUsers.js",
+    "backfill:search-tokens": "node scripts/backfillSearchTokens.js",
+    "migrate:vehicle-images": "node scripts/migrateVehicleNoteImages.js",
+    "cleanup:vehicle-images": "node scripts/cleanupOrphanImages.js"
   },
   "repository": {
     "type": "git",
@@ -38,6 +41,8 @@
     "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.4",
+    "multer": "^2.5.0",
+    "sharp": "^0.35.5",
     "xlsx": "^0.18.5",
     "zustand": "^5.0.14"
   }

@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -67,4 +68,19 @@ function verifyToken(token) {
   });
 }
 
-export { signToken, verifyToken };
+/*
+ * Derives a symmetric sub-key from the RSA private key (HKDF-SHA256).
+ *
+ * RS256 keys are asymmetric signing keys, so they can't be used directly as an
+ * AES key. But the private key never leaves this server, which makes it a good
+ * root secret: HKDF turns it into an independent 32-byte key per `purpose`
+ * (e.g. the AES-256-GCM key that seals pagination cursors — see utils/cursor.js).
+ * Nothing new to store or rotate, and the derived key can't be used to forge
+ * login tokens or vice-versa. If the RSA keys are rotated, previously issued
+ * cursors simply stop validating and the client restarts from page 1.
+ */
+function deriveKey(purpose, length = 32) {
+  return Buffer.from(crypto.hkdfSync("sha256", privateKey, "extremewheel/derived-keys/v1", purpose, length));
+}
+
+export { signToken, verifyToken, deriveKey };

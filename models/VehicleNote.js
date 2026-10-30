@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { searchTokensPlugin } from "../utils/searchTokens.js";
 
 const { Schema, model } = mongoose;
 
@@ -111,6 +112,32 @@ const vehicleNoteSchema = new Schema(
   {
     timestamps: true,
   }
+);
+
+// --- Search & pagination indexes -------------------------------------------
+// autoIndex is off (config/db.js), so these are created with
+// scripts/search-indexes.mongosh.js. Names must match that script.
+//
+// Type-ahead: hidden multikey array of word prefixes (see utils/searchTokens.js).
+vehicleNoteSchema.plugin(searchTokensPlugin, {
+  watch: ["name", "make", "model", "type", "year"],
+  fields: (get) => [get("name"), get("make"), get("model"), get("type"), get("year")],
+});
+
+// Default list order + cursor seek.
+vehicleNoteSchema.index({ createdAt: -1, _id: -1 }, { name: "vn_created_idx" });
+// Make -> Model -> Type filters (and each prefix of that chain), newest first.
+vehicleNoteSchema.index({ make: 1, model: 1, type: 1, createdAt: -1, _id: -1 }, { name: "vn_make_model_type_created_idx" });
+// Year-range filter.
+vehicleNoteSchema.index({ year: 1, createdAt: -1, _id: -1 }, { name: "vn_year_created_idx" });
+// Customer filter / customer-name search.
+vehicleNoteSchema.index({ customer: 1, createdAt: -1, _id: -1 }, { name: "vn_customer_created_idx" });
+// Multikey type-ahead search.
+vehicleNoteSchema.index({ searchTokens: 1, createdAt: -1, _id: -1 }, { name: "vn_search_tokens_idx" });
+// MongoDB text index: whole-word / stemmed fallback when no prefix matches.
+vehicleNoteSchema.index(
+  { name: "text", make: "text", model: "text", type: "text", year: "text" },
+  { name: "vn_text_idx", weights: { name: 10, make: 5, model: 5, type: 3, year: 1 }, default_language: "english" }
 );
 
 export default model("VehicleNote", vehicleNoteSchema);
