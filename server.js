@@ -32,14 +32,28 @@ import OeTireSize from "./models/OeTireSize.js";
 import { requireAuth, requirePermission, requireAnyPermission, loadAccess, hasPermission } from "./middleware/auth.js";
 import { NAV_PAGES, ALL_PERMISSION_KEYS, HIDDEN_PAGE_KEYS, sanitizePermissions } from "./config/permissionCatalog.js";
 import { signToken } from "./utils/jwt.js";
-import { cached, invalidatePrefix } from "./config/redis.js";
+import { cached, invalidatePrefix, connectCache } from "./config/redis.js";
 import { tireToleranceLimits } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
 import { parseCustomerInput } from "./utils/customerFields.js";
 import { upsertOeTireSize } from "./utils/oeTireSizeService.js";
 import { keysetPage, suggest, pageRoute, parseLimit, cleanQuery, cleanString } from "./utils/pagination.js";
 import { queryTerms } from "./utils/searchTokens.js";
+import { storeImage, uploadRoot } from "./utils/vehicleImageStore.js";
 import { importOeTireSizeWorkbook, buildOeTireSizeWorkbook, fetchAllOeTireSizesForExport } from "./utils/oeTireSizeExcel.js";
+// Background saving for Vehicle Notes (Redis + BullMQ worker + WebSocket).
+import { getQueue, isRedisReady, closeQueue } from "./config/queue.js";
+import { enqueueVehicleNoteSave, getVehicleNoteSaveStatus } from "./queues/vehicleNoteQueue.js";
+import { startVehicleNoteWorker } from "./workers/vehicleNoteWorker.js";
+import { attachSocketServer, issueWsTicket } from "./realtime/socketServer.js";
+import {
+    normalizeSpec,
+    pickVehicleInput,
+    pickUser,
+    saveVehicleNote,
+    cleanClientRef,
+    vehicleIdFromClientRef,
+} from "./services/vehicleNoteSaveService.js";
 import {
     importVehicleLookupWorkbook,
     buildVehicleLookupWorkbook,
@@ -61,13 +75,6 @@ const __dirname = path.dirname(__filename);
 
 app.use(compression());
 app.use(helmet());
-
-// Uploaded vehicle photos (/uploads/vehicle-notes/<hash>.webp). Nginx proxies
-// /uploads/ here, so Express must serve the folder. Registered BEFORE the
-// request logger and the API rate limiter so a grid of thumbnails doesn't eat
-// the 300 req/min budget. Set UPLOAD_DIR in .env if photos live outside server/uploads.
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
-app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", immutable: true, index: false }));
 
 // CORS is opt-in: unset CORS_ORIGINS (the default) keeps the current
 // same-origin-only behavior exactly as before. Set a comma-separated list
@@ -105,6 +112,11 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 app.set('trust proxy', 1);
+
+// Vehicle photos (stored as files, see utils/vehicleImageStore.js). File names are
+// content hashes, so they never change and can be cached for a long time.
+// (nginx's `location /uploads/` proxies here.)
+app.use("/uploads", express.static(uploadRoot(), { maxAge: "30d", immutable: true, index: false }));
 
 // General API-wide rate limit (defense in depth alongside the stricter
 // auth-only limiter below).
@@ -582,6 +594,41 @@ const parseExact = (raw) => raw === "1";
 // Year is stored as free text; a 4-digit value is what the Year filters offer.
 const parseYearParam = (raw) => (/^\d{4}$/.test(cleanString(raw)) ? cleanString(raw) : "");
 
+// Which stored field each kind of suggestion (see /suggest below) points at.
+// "customer" is handled separately (applyCustomerPick): it is a lookup, not a field.
+const PICK_FIELDS = { vehicle: "name", make: "make", model: "model", year: "year" };
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// "equals this text", ignoring case and surrounding spaces.
+const exactMatch = (text) => ({ $regex: `^\\s*${escapeRegex(text.trim())}\\s*$`, $options: "i" });
+
+// Adds "<field> equals <text>" (case-insensitive, surrounding spaces ignored)
+// to a filter object from vehicleListFilters(). The Make / Model dropdowns and
+// the Year range may already constrain the same field — that's combined (AND)
+// rather than overwritten.
+function applyPickFilter(filters, field, text) {
+    const wanted = text.trim();
+    if (field === "year") {
+        filters.year = { ...(filters.year || {}), $eq: wanted };
+    } else if (typeof filters[field] === "string" && filters[field].trim().toLowerCase() !== wanted.toLowerCase()) {
+        filters[field] = { $in: [] }; // dropdown says one make, suggestion another: nothing matches
+    } else {
+        filters[field] = exactMatch(wanted);
+    }
+}
+
+// A picked customer suggestion: the vehicles of the customer(s) with exactly
+// that name (two customers can share a name — then both count, as the
+// suggestion looked identical). The word search used before also matched
+// "John Smith Jr" and "Smith John", and — when the customer had no vehicles —
+// fell through to a loose text search that listed unrelated vehicles.
+async function applyCustomerPick(filters, text) {
+    const rows = await Customer.find({ fullName: exactMatch(text) }).select("_id").limit(200).lean();
+    let ids = rows.map((r) => r._id);
+    if (typeof filters.customer === "string") ids = ids.filter((id) => String(id) === filters.customer);
+    filters.customer = { $in: ids };
+}
+
 // Make / Model / Type / Customer / Year-range filters, as the raw params (these
 // seal into the cursor) and the equivalent MongoDB filter.
 function vehicleListFilters(query, req) {
@@ -610,9 +657,27 @@ function vehicleListFilters(query, req) {
 // GET /vehicle-notes/page?q=&make=&model=&type=&customer=&yearFrom=&yearTo=&limit=10&cursor=...
 // Must stay above GET /:id so "page" isn't read as a vehicle id.
 vehicleNoteRouter.get("/page", pageRoute(async (req, res) => {
-    const q = cleanQuery(req.query.q);
+    let q = cleanQuery(req.query.q);
     const { params, filters } = vehicleListFilters(req.query, req);
-    const exact = parseExact(req.query.exact);
+    let exact = parseExact(req.query.exact);
+
+    // The search text came from clicking ONE suggestion (&pick=vehicle|make|
+    // model|year). Show exactly what was clicked: a field-level match on that
+    // one field, instead of the word search below, which looks at name + make +
+    // model + type + year + customer together and so also returned vehicles
+    // that merely share words with the suggestion (e.g. clicking the vehicle
+    // "Ford Transit 350" also listed a van named "Fleet 3" whose make/model
+    // happen to be Ford / Transit 350).
+    const pickKind = exact && q ? String(req.query.pick || "") : "";
+    const pickField = PICK_FIELDS[pickKind];
+    if (pickField || (pickKind === "customer" && canViewCustomers(req))) {
+        if (pickField) applyPickFilter(filters, pickField, q);
+        else await applyCustomerPick(filters, q);
+        params.pick = pickKind;
+        params.pickText = q; // seals into the cursor, so page 2 keeps the same filter
+        q = "";
+        exact = false;
+    }
     const customerIds = await matchingCustomerIds(req, q, exact);
     const staff = canViewCustomers(req);
     const result = await keysetPage({
@@ -653,6 +718,36 @@ vehicleNoteRouter.get("/suggest", pageRoute(async (req, res) => {
     res.json({ suggestions });
 }));
 
+// One-time ticket for the live-update WebSocket (/ws). The browser can't send
+// an Authorization header on a WebSocket, so it trades its normal login for a
+// random 30-second ticket here and puts that in the ws:// URL instead.
+vehicleNoteRouter.post("/ws-ticket", async (req, res) => {
+    try {
+        if (!isRedisReady()) return res.status(503).json({ message: "Live updates are unavailable right now." });
+        res.set("Cache-Control", "no-store");
+        res.json({ ticket: await issueWsTicket(req.user) });
+    } catch (err) {
+        logToFile(`[VehicleNotes] ws-ticket failed: ${err.message}`);
+        res.status(503).json({ message: "Live updates are unavailable right now." });
+    }
+});
+
+// "Where is my save?" — the page's safety net when a WebSocket message is missed
+// (tab asleep, reconnecting…). Same words as the WebSocket events:
+// queued | processing | done | failed. Only the person who started it (or an admin).
+vehicleNoteRouter.get("/save-status/:jobId", async (req, res) => {
+    try {
+        const status = await getVehicleNoteSaveStatus(String(req.params.jobId).slice(0, 100), req.user);
+        res.set("Cache-Control", "no-store");
+        if (!status) return res.status(404).json({ message: "Save not found." });
+        res.json(status);
+    } catch (err) {
+        // Redis hiccup: tell the page to keep waiting, not that the save failed.
+        logToFile(`[VehicleNotes] save-status failed: ${err.message}`);
+        res.status(503).json({ message: "Status temporarily unavailable." });
+    }
+});
+
 // Single vehicle — backs the read-only detail page (/vehicle-notes/:id).
 // Internal staff notes and the creator's name are staff/admin only; anyone
 // else gets them stripped here (the client hides them for the same roles).
@@ -677,21 +772,6 @@ vehicleNoteRouter.get("/:id", async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-// Normalizes the existing/upgraded engine + tyre spec payload so partial
-// input (e.g. engine only, no tyre numbers yet) never crashes the write.
-function normalizeSpec(spec) {
-    if (!spec || typeof spec !== "object") return undefined;
-    const tyre = spec.tyre && typeof spec.tyre === "object" ? spec.tyre : {};
-    return {
-        engine: typeof spec.engine === "string" ? spec.engine : "",
-        tyre: {
-            width: tyre.width !== undefined && tyre.width !== "" ? Number(tyre.width) : undefined,
-            aspect: tyre.aspect !== undefined && tyre.aspect !== "" ? Number(tyre.aspect) : undefined,
-            rim: tyre.rim !== undefined && tyre.rim !== "" ? Number(tyre.rim) : undefined,
-        },
-    };
-}
-
 // Reads the optional `customer` field of a create/update body.
 //   undefined        -> { skip: true }   field not sent, leave as is
 //   "" / null        -> { clear: true }  detach the customer
@@ -714,84 +794,73 @@ async function resolveCustomerField(req, customer) {
     return { id: customer };
 }
 
+// --- Saving a vehicle (create / edit) ---------------------------------------
+// Saving a vehicle with photos is slow (a multi-MB document write), so the
+// routes below no longer do it while the browser waits:
+//
+//   1. validate + authorise (fast)                      -> this request
+//   2. put the save on the BullMQ queue (Redis)         -> 202 { jobId } at once
+//   3. the worker writes to MongoDB                     -> workers/vehicleNoteWorker.js
+//   4. progress is pushed to the browser over WebSocket -> realtime/socketServer.js
+//      (the page also polls GET /save-status/:jobId as a safety net)
+//
+// If Redis is down the save simply happens inline, exactly like before, and the
+// response is the saved vehicle (200/201) — so the person is never blocked by
+// infrastructure. The client handles both shapes.
+async function dispatchVehicleSave(req, res, job) {
+    const payload = { ...job, user: pickUser(req.user) };
+    try {
+        const jobId = await enqueueVehicleNoteSave(payload);
+        return res.status(202).json({ queued: true, jobId, vehicleId: job.vehicleId, clientRef: job.clientRef });
+    } catch (err) {
+        // Not "the save is invalid" — only "the queue isn't reachable".
+        logToFile(`[VehicleNotes] queue unavailable (${err.message}) — saving inline`);
+    }
+    const vehicle = await saveVehicleNote(payload);
+    if (canViewCustomers(req)) await vehicle.populate("customer", "fullName email phone");
+    else vehicle.customer = undefined;
+    return res.status(job.kind === "create" ? 201 : 200).json({ vehicle });
+}
+
 vehicleNoteRouter.post("/", requireAuth, requirePermission("vehicle-notes.add"), async (req, res, next) => {
     try {
-        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes, customer } = req.body;
+        const input = pickVehicleInput(req.body);
 
-        if (!name || !make || !model || !type) {
+        if (!input.name || !input.make || !input.model || !input.type) {
             return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
         }
 
-        const customerField = await resolveCustomerField(req, customer);
+        const customerField = await resolveCustomerField(req, req.body.customer);
         if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
 
-        // Map initial staff notes securely if provided during "Add Vehicle"
-        let mappedNotes = [];
-        if (Array.isArray(staffNotes)) {
-            mappedNotes = staffNotes.map(n => ({
-                text: n.text,
-                authorName: n.authorName || req.user.name || req.user.email,
-                author: req.user._id,
-                createdAt: n.createdAt ? new Date(n.createdAt) : new Date()
-            }));
-        }
+        // A fixed _id per clientRef makes this create idempotent (see
+        // vehicleIdFromClientRef): a double click or a retried request can't
+        // produce two vehicles.
+        const clientRef = cleanClientRef(req.body.clientRef);
+        const vehicleId = clientRef
+            ? vehicleIdFromClientRef(req.user._id, clientRef)
+            : String(new mongoose.Types.ObjectId());
 
-        const vehicle = await VehicleNote.create({
-            name,
-            make,
-            type,
-            model,
-            year,
-            image,
-            beforeImage,
-            afterImage,
-            gallery: Array.isArray(gallery) ? gallery : [],
-            offsetNotes,
-            staffNotes: mappedNotes,
-            existingSpec: normalizeSpec(existingSpec),
-            upgradedSpec: normalizeSpec(upgradedSpec),
-            eventDate: eventDate ? new Date(eventDate) : undefined,
-            ...(customerField.id && { customer: customerField.id }),
-            createdBy: req.user._id,
-        });
-        if (canViewCustomers(req)) await vehicle.populate("customer", "fullName email phone");
-        else vehicle.customer = undefined;
-        res.status(201).json({ vehicle });
+        await dispatchVehicleSave(req, res, { kind: "create", vehicleId, input, customerField, clientRef });
     } catch (err) { next(err); }
 });
 
 vehicleNoteRouter.put("/:id", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
-        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate, customer } = req.body;
+        if (!mongoose.isValidObjectId(req.params.id) || !(await VehicleNote.exists({ _id: req.params.id }))) {
+            return res.status(404).json({ message: "Vehicle not found." });
+        }
 
-        const customerField = await resolveCustomerField(req, customer);
+        const customerField = await resolveCustomerField(req, req.body.customer);
         if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
 
-        const vehicle = await VehicleNote.findByIdAndUpdate(
-            req.params.id,
-            {
-                ...(customerField.id && { customer: customerField.id }),
-                ...(name && { name }),
-                ...(make && { make }),
-                ...(type && { type }),
-                ...(model && { model }),
-                ...(year !== undefined && { year }),
-                ...(image !== undefined && { image }),
-                ...(beforeImage !== undefined && { beforeImage }),
-                ...(afterImage !== undefined && { afterImage }),
-                ...(Array.isArray(gallery) && { gallery }),
-                ...(offsetNotes !== undefined && { offsetNotes }),
-                ...(existingSpec !== undefined && { existingSpec: normalizeSpec(existingSpec) }),
-                ...(upgradedSpec !== undefined && { upgradedSpec: normalizeSpec(upgradedSpec) }),
-                ...(eventDate !== undefined && { eventDate: eventDate ? new Date(eventDate) : null }),
-                ...(customerField.clear && { $unset: { customer: 1 } }),
-            },
-            { new: true }
-        );
-        if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
-        if (canViewCustomers(req)) await vehicle.populate("customer", "fullName email phone");
-        else vehicle.customer = undefined;
-        res.json({ vehicle });
+        await dispatchVehicleSave(req, res, {
+            kind: "update",
+            vehicleId: String(req.params.id),
+            input: pickVehicleInput(req.body),
+            customerField,
+            clientRef: cleanClientRef(req.body.clientRef),
+        });
     } catch (err) { next(err); }
 });
 
@@ -872,7 +941,7 @@ vehicleNoteRouter.post("/:id/gallery", requireAuth, requirePermission("vehicle-n
         if (!image) return res.status(400).json({ message: "image is required." });
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
-            { $push: { gallery: image } },
+            { $push: { gallery: await storeImage(image) } },
             { new: true }
         );
         if (!vehicle) return res.status(404).json({ message: "Vehicle not found." });
@@ -2239,9 +2308,39 @@ app.use(errorHandler);
 
 initializeApp()
     .then(() => {
-        app.listen(PORT, () => {
+        const server = app.listen(PORT, () => {
             console.log(`[server] The extremewheel api server is running on port ${PORT}`);
         });
+
+        // Live save progress (WebSocket at /ws) + the Redis queue producer.
+        // Neither is allowed to stop the API from starting if Redis is down:
+        // saves fall back to being done inline (see dispatchVehicleSave).
+        let realtime = null;
+        let worker = null;
+        connectCache(); // response cache (config/redis.js)
+        try {
+            getQueue(); // open the producer connection now, not on the first save
+            realtime = attachSocketServer(server);
+            // RUN_QUEUE_WORKER=false -> run the worker as its own process
+            // (`node workers/vehicleNoteWorker.js`) instead of inside the API.
+            if (process.env.RUN_QUEUE_WORKER !== "false") worker = startVehicleNoteWorker();
+        } catch (err) {
+            logToFile(`[App] ❌ Background saving could not start (${err.message}) — saves will run inline`);
+        }
+
+        let stopping = false;
+        const shutdown = async (signal) => {
+            if (stopping) return;
+            stopping = true;
+            logToFile(`[App] ${signal} received — shutting down`);
+            // Let the worker finish the save it is in the middle of.
+            await Promise.allSettled([worker?.close(), realtime?.close()]);
+            await closeQueue();
+            server.close(() => process.exit(0));
+            setTimeout(() => process.exit(0), 10000).unref();
+        };
+        process.on("SIGTERM", () => shutdown("SIGTERM"));
+        process.on("SIGINT", () => shutdown("SIGINT"));
     })
     .catch((err) => {
         console.error("[server] failed to start:", err.message);
