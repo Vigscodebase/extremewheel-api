@@ -25,7 +25,7 @@ import connectDB from "../config/db.js";
 import { buildTokens, tireSizeWords } from "../utils/searchTokens.js";
 import VehicleNote from "../models/VehicleNote.js";
 import SavedComparison from "../models/SavedComparison.js";
-import TireOption from "../models/TireOption.js";
+// import TireOption from "../models/TireOption.js"; // hidden: Tire Size Option is switched off
 import Customer from "../models/Customer.js";
 import User from "../models/User.js";
 
@@ -44,7 +44,7 @@ const TARGETS = [
       tireSizeWords(d.comparison?.tireB?.width, d.comparison?.tireB?.aspect, d.comparison?.tireB?.rim),
     ],
   },
-  { Model: TireOption, project: "label width aspect rim", fields: (d) => [d.label, tireSizeWords(d.width, d.aspect, d.rim)] },
+  // { Model: TireOption, project: "label width aspect rim", fields: (d) => [d.label, tireSizeWords(d.width, d.aspect, d.rim)] }, // hidden: Tire Size Option is switched off
   { Model: Customer, project: "fullName", fields: (d) => [d.fullName] },
   { Model: User, project: "name email", fields: (d) => [d.name, d.email] },
 ];

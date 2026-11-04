@@ -23,7 +23,7 @@ export const NAV_PAGES = [
     { key: "tire-calculator", label: "Tire Size Calculator", path: "/tire-calculator", icon: "Calculator" },
     { key: "tire-comparison", label: "Tire Size Comparison", path: "/tire-comparison", icon: "Scale" },
     { key: "plus-size", label: "Plus Size Options", path: "/plus-size", icon: "TrendingUp" },
-    { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" },
+    // { key: "tire-options", label: "Tire Size Option", path: "/tire-options", icon: "SlidersHorizontal" }, // hidden: Tire Size Option is switched off (see HIDDEN_PAGE_KEYS)
     { key: "tech-data", label: "Tech Data", path: "/tech-data", icon: "Wrench" },
     { key: "vehicle-notes", label: "Vehicle Notes", path: "/vehicle-notes", icon: "Car" },
     { key: "reports", label: "Reporting & Data Export", path: "/reports", icon: "FileBarChart" },
@@ -34,7 +34,14 @@ export const NAV_PAGES = [
 // Application Guide route still exists but is hidden from the UI). They can
 // still be held by a user (e.g. carried over by the migration script) and are
 // preserved when an admin saves that user's permissions from the UI.
-export const HIDDEN_PAGE_KEYS = ["application-guide"];
+//
+// "tire-options" (Tire Size Option) lives here too while that feature is switched
+// off: it's out of the sidebar and the permissions screen, but the key stays
+// valid (the guards on its — currently unmounted — routes still reference it, and
+// an unknown key makes the server refuse to start) and any grant a user already
+// holds is kept, so turning the feature back on doesn't mean re-granting anyone.
+// To bring it back: move it back into NAV_PAGES and remove it from this list.
+export const HIDDEN_PAGE_KEYS = ["application-guide", "tire-options"];
 
 const el = (key, label, parent) => ({ key, label, parent });
 
@@ -43,7 +50,7 @@ export const ELEMENT_PERMISSIONS = [
     // Dashboard — one per tile
     el("dashboard.tile.total-users", "Total users", "dashboard"),
     el("dashboard.tile.vehicle-notes", "Vehicle notes count", "dashboard"),
-    el("dashboard.tile.tire-presets", "Tire presets count", "dashboard"),
+    // el("dashboard.tile.tire-presets", "Tire presets count", "dashboard"), // hidden: see HIDDEN_ELEMENT_PERMISSIONS
     el("dashboard.tile.quick-access", "Quick access", "dashboard"),
     el("dashboard.tile.tire-showroom", "Tire showroom", "dashboard"),
     el("dashboard.tile.recent-vehicles", "Recently added vehicles", "dashboard"),
@@ -75,10 +82,20 @@ export const ELEMENT_PERMISSIONS = [
     el("reports.download", "Download CSV button", "reports"),
 ];
 
+// Element permissions that are switched off in the UI (not on the permissions
+// screen, no control rendered) but must stay valid and be preserved on save, for
+// the same reason as HIDDEN_PAGE_KEYS. To bring one back, move it back into
+// ELEMENT_PERMISSIONS (and into the client mirror).
+export const HIDDEN_ELEMENT_PERMISSIONS = [
+    el("dashboard.tile.tire-presets", "Tire presets count", "dashboard"),
+];
+export const HIDDEN_ELEMENT_KEYS = HIDDEN_ELEMENT_PERMISSIONS.map((e) => e.key);
+
 export const PERMISSIONS = [
     ...NAV_PAGES.map((p) => ({ key: p.key, label: p.label, parent: null })),
     ...HIDDEN_PAGE_KEYS.map((key) => ({ key, label: key, parent: null })),
     ...ELEMENT_PERMISSIONS,
+    ...HIDDEN_ELEMENT_PERMISSIONS,
 ];
 
 export const ALL_PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);

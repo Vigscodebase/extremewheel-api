@@ -52,10 +52,22 @@ const userSchema = new mongoose.Schema({
     type: Date,
     select: false,
   },
+  // Login tokens never expire, so they are revoked here instead: any token
+  // issued before this moment is refused (see requireAuth). It is bumped
+  // whenever the password, email or role changes — so a password change or reset
+  // signs out every device that was using the old credentials.
+  tokensValidAfter: {
+    type: Date,
+    select: false,
+  },
 });
 
 // FIXED: Removed the 'next' parameter and the next() calls
 userSchema.pre("save", async function () {
+  if (!this.isNew && (this.isModified("password") || this.isModified("email") || this.isModified("role"))) {
+    this.tokensValidAfter = new Date();
+  }
+
   if (!this.isModified("password")) {
     return; // Simply return to skip hashing
   }

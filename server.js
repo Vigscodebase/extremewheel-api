@@ -7,6 +7,7 @@ import path from "path";
 import helmet from "helmet";
 import compression from "compression";
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 
 import logToFile from "./logger.js";
@@ -29,8 +30,9 @@ import RecentActivity from "./models/RecentActivity.js";
 import OeTireSize from "./models/OeTireSize.js";
 
 // Middleware
-import { requireAuth, requirePermission, requireAnyPermission, loadAccess, hasPermission } from "./middleware/auth.js";
-import { NAV_PAGES, ALL_PERMISSION_KEYS, HIDDEN_PAGE_KEYS, sanitizePermissions } from "./config/permissionCatalog.js";
+import { requireAuth, requirePermission, requireAnyPermission, requireAnyPage, loadAccess, hasPermission } from "./middleware/auth.js";
+import { rejectOperatorKeys, ensureBody } from "./middleware/sanitize.js";
+import { NAV_PAGES, ALL_PERMISSION_KEYS, HIDDEN_PAGE_KEYS, HIDDEN_ELEMENT_KEYS, sanitizePermissions } from "./config/permissionCatalog.js";
 import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix, connectCache } from "./config/redis.js";
 import { tireToleranceLimits } from "./utils/tireMath.js";
@@ -110,13 +112,11 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.json({ limit: "50mb" }));
+// NOTE: the JSON body parser (50 MB, for photo uploads) and the /uploads static
+// files are deliberately NOT registered here. They are mounted further down,
+// AFTER the authentication gate (see "MOUNT ROUTERS"), so an anonymous caller can
+// neither make the server buffer a 50 MB body nor fetch a vehicle photo.
 app.set('trust proxy', 1);
-
-// Vehicle photos (stored as files, see utils/vehicleImageStore.js). File names are
-// content hashes, so they never change and can be cached for a long time.
-// (nginx's `location /uploads/` proxies here.)
-app.use("/uploads", express.static(uploadRoot(), { maxAge: "30d", immutable: true, index: false }));
 
 // General API-wide rate limit (defense in depth alongside the stricter
 // auth-only limiter below).
@@ -168,12 +168,16 @@ const authLimiter = rateLimit({
     message: { message: "Too many attempts. Please try again in a few minutes." },
 });
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Compared against when a login names an unknown email, so "no such account" and
+// "wrong password" take the same time and can't be told apart by timing.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("not-a-real-password", 10);
+const isString = (v) => typeof v === "string";
 
 authRouter.post("/register", authLimiter, async (req, res, next) => {
     try {
         const { name, email, password } = req.body;
 
-        if (!name || !email || !password) {
+        if (!isString(name) || !isString(email) || !isString(password) || !name.trim() || !email || !password) {
             return res.status(400).json({ message: "Name, email and password are required." });
         }
         if (!EMAIL_RE.test(email)) {
@@ -212,7 +216,7 @@ const hashResetToken = (token) => crypto.createHash("sha256").update(token).dige
 authRouter.post("/forgot-password", authLimiter, async (req, res, next) => {
     try {
         const { email } = req.body;
-        if (!email || !EMAIL_RE.test(email)) {
+        if (!isString(email) || !EMAIL_RE.test(email)) {
             return res.status(400).json({ message: "Enter a valid email address." });
         }
 
@@ -262,7 +266,7 @@ authRouter.post("/forgot-password", authLimiter, async (req, res, next) => {
 authRouter.post("/reset-password", authLimiter, async (req, res, next) => {
     try {
         const { email, token, password } = req.body;
-        if (!email || !token || !password) {
+        if (!isString(email) || !isString(token) || !isString(password) || !email || !token || !password) {
             return res.status(400).json({ message: "Email, token and new password are required." });
         }
         if (password.length < 8) {
@@ -293,12 +297,13 @@ authRouter.post("/login", authLimiter, async (req, res, next) => {
     try {
         const { email, password } = req.body;
 
-        if (!email || !password) {
+        if (!isString(email) || !isString(password) || !email || !password) {
             return res.status(400).json({ message: "Email and password are required." });
         }
 
         const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
         if (!user) {
+            await bcrypt.compare(password, DUMMY_PASSWORD_HASH); // equalise timing, see above
             return res.status(401).json({ message: "Invalid email or password." });
         }
 
@@ -399,17 +404,43 @@ userRouter.get("/suggest", pageRoute(async (req, res) => {
     res.json({ suggestions });
 }));
 
+// --- Admin-account protection ---------------------------------------------
+// "user-management" is an ordinary, grantable permission, but an admin account
+// is the master account: it passes EVERY permission check. So holding
+// user-management must never be a way to become, create, edit, take over or
+// delete an admin — otherwise anyone granted it could promote themselves (or a
+// friend) to admin, or reset an admin's password and sign in as them.
+//   - only an admin may create an admin, make someone an admin, or touch an
+//     existing admin account (edit, reset password, change email, delete)
+//   - nobody can change their own role
+//   - the last remaining admin can't be demoted or deleted (no lock-out)
+const ROLES = ["admin", "staff", "guest"]; // keep in step with the enum in models/User.js
+const ADMIN_ONLY_MESSAGE = "Only an admin can create, change or delete admin accounts.";
+const actorIsAdmin = (req) => req.user.role === "admin";
+const otherAdminsExist = async (excludeId) =>
+    (await User.countDocuments({ role: "admin", _id: { $ne: excludeId } })) > 0;
+
 userRouter.post("/", requireAuth, async (req, res, next) => {
     try {
         const { name, email, password, role } = req.body;
-        if (!name || !email || !password) {
+        if (!isString(name) || !isString(email) || !isString(password) || !name.trim() || !email.trim() || !password) {
             return res.status(400).json({ message: "Name, email and password are required." });
+        }
+        if (!EMAIL_RE.test(email)) {
+            return res.status(400).json({ message: "Enter a valid email address." });
+        }
+        const newRole = role || "guest";
+        if (!isString(newRole) || !ROLES.includes(newRole)) {
+            return res.status(400).json({ message: "Invalid role." });
+        }
+        if (newRole === "admin" && !actorIsAdmin(req)) {
+            return res.status(403).json({ message: ADMIN_ONLY_MESSAGE });
         }
         const existing = await User.findOne({ email: email.toLowerCase() });
         if (existing) {
             return res.status(409).json({ message: "An account with that email already exists." });
         }
-        const user = await User.create({ name, email, password, role: role || "guest", createdBy: req.user._id });
+        const user = await User.create({ name, email, password, role: newRole, createdBy: req.user._id });
         res.status(201).json({ user });
     } catch (err) { next(err); }
 });
@@ -417,8 +448,39 @@ userRouter.post("/", requireAuth, async (req, res, next) => {
 userRouter.put("/:id", requireAuth, async (req, res, next) => {
     try {
         const { name, email, role, password } = req.body;
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(404).json({ message: "User not found." });
+        }
         const user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ message: "User not found." });
+
+        // Non-admins can't touch an admin account at all (edit, password reset, email change…).
+        if (user.role === "admin" && !actorIsAdmin(req)) {
+            return res.status(403).json({ message: ADMIN_ONLY_MESSAGE });
+        }
+
+        if (role) {
+            if (!isString(role) || !ROLES.includes(role)) {
+                return res.status(400).json({ message: "Invalid role." });
+            }
+            if (role !== user.role) {
+                if (role === "admin" && !actorIsAdmin(req)) {
+                    return res.status(403).json({ message: ADMIN_ONLY_MESSAGE });
+                }
+                if (String(user._id) === String(req.user._id)) {
+                    return res.status(400).json({ message: "You can't change your own role." });
+                }
+                if (user.role === "admin" && !(await otherAdminsExist(user._id))) {
+                    return res.status(400).json({ message: "At least one admin account must remain." });
+                }
+            }
+        }
+        if (name !== undefined && name !== null && !isString(name)) {
+            return res.status(400).json({ message: "Invalid name." });
+        }
+        if (password !== undefined && password !== null && password !== "" && !isString(password)) {
+            return res.status(400).json({ message: "Invalid password." });
+        }
 
         // Permissions belong to the email address. If the email changes, this
         // may be a different person (or a reassigned mailbox), so whatever the
@@ -450,7 +512,6 @@ userRouter.put("/:id", requireAuth, async (req, res, next) => {
 userRouter.delete("/:id", requireAuth, async (req, res, next) => {
     try {
         const loggedInUserId = req.user?._id || req.user?.id;
-        console.log(loggedInUserId)
 
         if (!loggedInUserId) {
             return res.status(401).json({ message: "Authentication required or user data malformed." });
@@ -459,13 +520,22 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
         if (req.params.id === loggedInUserId.toString()) {
             return res.status(400).json({ message: "You can't delete your own account while signed in." });
         }
-
-        const user = await User.findByIdAndDelete(req.params.id);
-
-        if (!user) {
+        if (!mongoose.isValidObjectId(req.params.id)) {
             return res.status(404).json({ message: "User not found." });
         }
 
+        const target = await User.findById(req.params.id).select("role");
+        if (!target) {
+            return res.status(404).json({ message: "User not found." });
+        }
+        if (target.role === "admin") {
+            if (!actorIsAdmin(req)) return res.status(403).json({ message: ADMIN_ONLY_MESSAGE });
+            if (!(await otherAdminsExist(target._id))) {
+                return res.status(400).json({ message: "At least one admin account must remain." });
+            }
+        }
+
+        await User.findByIdAndDelete(target._id);
         res.json({ success: true });
     } catch (err) {
         next(err);
@@ -526,7 +596,7 @@ permissionRouter.put("/users/:id", requireAuth, requirePermission("user-manageme
 
         // Grants for pages that are hidden from the permissions screen are not
         // editable there, so keep whatever the user already holds.
-        const keptHidden = (existing.permissions || []).filter((k) => HIDDEN_PAGE_KEYS.includes(k));
+        const keptHidden = (existing.permissions || []).filter((k) => HIDDEN_PAGE_KEYS.includes(k) || HIDDEN_ELEMENT_KEYS.includes(k));
         const next = sanitizePermissions([...permissions, ...keptHidden]);
 
         // Matching on the email in the filter makes the check above atomic: if
@@ -901,7 +971,7 @@ const requireStaffOrAdminOnly = (req, res, next) => {
 vehicleNoteRouter.post("/:id/notes", requireStaffOrAdmin, async (req, res, next) => {
     try {
         const { text } = req.body;
-        if (!text || !text.trim()) return res.status(400).json({ message: "Note text is required." });
+        if (!isString(text) || !text.trim()) return res.status(400).json({ message: "Note text is required." });
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             {
@@ -938,7 +1008,7 @@ vehicleNoteRouter.delete("/:id/notes/:noteId", requireStaffOrAdmin, async (req, 
 vehicleNoteRouter.post("/:id/gallery", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
         const { image } = req.body;
-        if (!image) return res.status(400).json({ message: "image is required." });
+        if (!image || !isString(image)) return res.status(400).json({ message: "image is required." });
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             { $push: { gallery: await storeImage(image) } },
@@ -952,7 +1022,8 @@ vehicleNoteRouter.post("/:id/gallery", requireAuth, requirePermission("vehicle-n
 vehicleNoteRouter.delete("/:id/gallery", requireAuth, requirePermission("vehicle-notes.edit"), async (req, res, next) => {
     try {
         const { image } = req.body;
-        if (!image) return res.status(400).json({ message: "image is required." });
+        // String only: an object here ({"$ne": null}) would pull EVERY photo.
+        if (!image || !isString(image)) return res.status(400).json({ message: "image is required." });
         const vehicle = await VehicleNote.findByIdAndUpdate(
             req.params.id,
             { $pull: { gallery: image } },
@@ -980,7 +1051,15 @@ vehicleNoteRouter.delete("/:id", requireAuth, requirePermission("vehicle-notes.d
 //   - edit / delete: admin only
 // Email and phone are unique; a clash is reported per field.
 const customerRouter = express.Router();
-customerRouter.use(requireAuth, requireStaffOrAdminOnly);
+// Staff/admin role AND access to at least one page that works with customers
+// (Vehicle Notes, Tire Size Comparison, Tire Size Option): a staff account with no
+// page grants must not be able to read the customer list.
+customerRouter.use(
+    requireAuth,
+    requireStaffOrAdminOnly,
+    // requireAnyPermission("vehicle-notes", "tire-comparison", "tire-options") // hidden: Tire Size Option is switched off
+    requireAnyPermission("vehicle-notes", "tire-comparison")
+);
 
 // Which unique field (if any) already belongs to a *different* customer.
 async function findCustomerConflict({ email, phone }, excludeId) {
@@ -1062,10 +1141,10 @@ customerRouter.put("/:id", requireAdmin, async (req, res, next) => {
     }
 });
 
-// Deleting a customer detaches them from any vehicle notes, saved tire
-// comparisons and Tire Size Option presets that pointed at them (the vehicles
-// and presets themselves are kept) so nothing is left referencing a customer
-// that no longer exists.
+// Deleting a customer detaches them from any vehicle notes and saved tire
+// comparisons that pointed at them (the vehicles themselves are kept) so nothing
+// is left referencing a customer that no longer exists.
+// (Tire Size Option presets are no longer touched here — that feature is switched off.)
 customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
     try {
         if (!mongoose.isValidObjectId(req.params.id)) {
@@ -1076,13 +1155,14 @@ customerRouter.delete("/:id", requireAdmin, async (req, res, next) => {
         const detached = await VehicleNote.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
         // Saved tire comparisons can point at a customer too — detach those as well.
         const detachedComparisons = await SavedComparison.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
-        // Tire Size Option presets can point at a customer too — detach those as well.
-        const detachedPresets = await TireOption.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
+        // Hidden: Tire Size Option presets are switched off, so customers are no longer detached from them.
+        // // Tire Size Option presets can point at a customer too — detach those as well.
+        // const detachedPresets = await TireOption.updateMany({ customer: customer._id }, { $unset: { customer: 1 } });
         res.json({
             success: true,
             detachedVehicles: detached.modifiedCount ?? 0,
             detachedComparisons: detachedComparisons.modifiedCount ?? 0,
-            detachedPresets: detachedPresets.modifiedCount ?? 0,
+            // detachedPresets: detachedPresets.modifiedCount ?? 0, // hidden: Tire Size Option is switched off
         });
     } catch (err) { next(err); }
 });
@@ -1267,7 +1347,9 @@ const VEHICLE_LOOKUP_CACHE_TTL_SECONDS = Number(process.env.VEHICLE_LOOKUP_CACHE
 // but not Vehicle Notes can still fill in the preset form's Make dropdown.
 // Merges the Make/Model/Type table with makes that were added on their own
 // (see models/VehicleLookupMake.js).
-vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-options", "tire-comparison.save"), async (req, res, next) => {
+// hidden: Tire Size Option is switched off, so it no longer unlocks the Make list:
+// vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-options", "tire-comparison.save"), async (req, res, next) => {
+vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-notes", "tire-comparison.save"), async (req, res, next) => {
     try {
         const makes = await cached("vehicle-lookup:makes", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, async () => {
             const [fromLookup, standalone] = await Promise.all([
@@ -1456,6 +1538,11 @@ vehicleLookupRouter.delete("/year", requireStaffOrAdminOnly, async (req, res, ne
 });
 
 // --- Tire Options Routes ---
+// HIDDEN: the Tire Size Option feature is switched off. This router is kept
+// intact but is NOT mounted (see `app.use("/tire-options", ...)` near the bottom),
+// so none of these endpoints respond. To bring the feature back, uncomment that
+// line, move "tire-options" from HIDDEN_PAGE_KEYS back to NAV_PAGES in
+// config/permissionCatalog.js, and undo the matching "hidden:" comments on the client.
 // Create/update/delete are limited to the staff and admin roles (see
 // requireStaffOrAdminOnly above) — everyone with tire-options page access
 // can still browse the library (used by the Calculator/Comparison/Plus Size
@@ -1473,10 +1560,15 @@ const tireOptionRouter = express.Router();
 // Customer name / email / phone are personal data: only staff and admin get the
 // populated customer. Everyone else (the Calculator, Comparison and Plus Size
 // pages read this list too) gets the preset without it.
-tireOptionRouter.get("/", requireAuth, async (req, res, next) => {
+// The preset list feeds the Calculator, Comparison, Plus Size, Tech Data and Tire
+// Size Option pages, so any of those five unlocks it (it used to need only a
+// login). The customer on a preset is only sent to staff/admin who also hold
+// Tire Size Option.
+const TIRE_OPTION_READ_PAGES = ["tire-options", "tire-calculator", "tire-comparison", "plus-size", "tech-data"];
+tireOptionRouter.get("/", requireAuth, requireAnyPermission(...TIRE_OPTION_READ_PAGES), async (req, res, next) => {
     try {
         let query = TireOption.find().sort({ createdAt: -1 });
-        query = canViewCustomers(req)
+        query = canViewCustomers(req) && hasPermission(req.access, "tire-options")
             ? query.populate("customer", "fullName email phone")
             : query.select("-customer");
         const options = await query;
@@ -1535,7 +1627,7 @@ tireOptionRouter.get("/suggest", requireAuth, requirePermission("tire-options"),
     res.json({ suggestions });
 }));
 
-tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
+tireOptionRouter.post("/", requireAuth, requirePermission("tire-options"), requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const { label, make, width, aspect, rim, customer } = req.body;
         const cleanMake = typeof make === "string" ? make.trim() : "";
@@ -1572,7 +1664,7 @@ tireOptionRouter.post("/", requireAuth, requireStaffOrAdminOnly, async (req, res
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
+tireOptionRouter.put("/:id", requireAuth, requirePermission("tire-options"), requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const { label, make, width, aspect, rim, customer } = req.body;
         const customerField = await resolveCustomerField(req, customer);
@@ -1605,7 +1697,7 @@ tireOptionRouter.put("/:id", requireAuth, requireStaffOrAdminOnly, async (req, r
     } catch (err) { next(err); }
 });
 
-tireOptionRouter.delete("/:id", requireAuth, requireStaffOrAdminOnly, async (req, res, next) => {
+tireOptionRouter.delete("/:id", requireAuth, requirePermission("tire-options"), requireStaffOrAdminOnly, async (req, res, next) => {
     try {
         const option = await TireOption.findByIdAndDelete(req.params.id);
         if (!option) return res.status(404).json({ message: "Preset not found." });
@@ -1678,6 +1770,10 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         // per-candidate.
         const query = {
             overallHeightIn: { $gte: oeLimits.heightLowerLimitIn, $lte: oeLimits.heightUpperLimitIn },
+            // Hidden: Tire Size Option is switched off, so OE rows that were synced
+            // from its presets (source "tire-options") are never returned — for any
+            // user, admin included. Remove this line to show them again.
+            source: { $ne: "tire-options" },
         };
         // TEMPORARILY DISABLED — targetRim narrowing (see note above).
         // if (targetRim) query.rim = Number(targetRim);
@@ -1805,7 +1901,9 @@ plusSizeRouter.post("/save", async (req, res, next) => {
 
 // --- Recent Activity Routes ---
 const activityRouter = express.Router();
-activityRouter.use(requireAuth);
+// Recent activity is shared between users, so having a login is not enough: the
+// account must have been granted at least one page.
+activityRouter.use(requireAuth, requireAnyPage);
 
 activityRouter.post("/tire-comparison", requirePermission("tire-comparison.save"), async (req, res, next) => {
     try {
@@ -1856,7 +1954,9 @@ activityRouter.get("/recent", async (req, res, next) => {
 // surface matching saved presets, past comparisons and vehicle notes
 // (with before/after photos + existing/upgraded engine & tyre spec) right
 // under a freshly computed result.
-activityRouter.get("/suggestions", async (req, res, next) => {
+// const SUGGESTION_PAGES = ["tire-calculator", "tire-comparison", "tire-options", "plus-size"]; // hidden: Tire Size Option is switched off
+const SUGGESTION_PAGES = ["tire-calculator", "tire-comparison", "plus-size"];
+activityRouter.get("/suggestions", requireAnyPermission(...SUGGESTION_PAGES), async (req, res, next) => {
     try {
         const width = Number(req.query.width);
         const aspect = Number(req.query.aspect);
@@ -1865,8 +1965,9 @@ activityRouter.get("/suggestions", async (req, res, next) => {
             return res.status(400).json({ message: "width, aspect and rim are required." });
         }
 
-        const [presets, comparisons, plusSizeSaves, vehicles] = await Promise.all([
-            TireOption.find({ width, aspect, rim }).select("-customer").limit(6).lean(),
+        const [comparisons, plusSizeSaves, vehicles] = await Promise.all([
+            // Hidden: Tire Size Option presets are switched off, so they are no longer looked up.
+            // TireOption.find({ width, aspect, rim }).select("-customer").limit(6).lean(),
             RecentActivity.find({
                 type: "tire-comparison",
                 $or: [
@@ -1887,17 +1988,25 @@ activityRouter.get("/suggestions", async (req, res, next) => {
                 .sort({ createdAt: -1 })
                 .limit(6)
                 .lean(),
-            VehicleNote.find({
-                $or: [
-                    { "existingSpec.tyre.width": width, "existingSpec.tyre.aspect": aspect, "existingSpec.tyre.rim": rim },
-                    { "upgradedSpec.tyre.width": width, "upgradedSpec.tyre.aspect": aspect, "upgradedSpec.tyre.rim": rim },
-                ],
-            })
-                .limit(6)
-                .lean(),
+            // Vehicle notes are the Vehicle Notes page's data: only returned to
+            // users who hold that page, and never with the internal staff notes,
+            // customer link or creator (this used to send the raw documents to any
+            // logged-in user).
+            hasPermission(req.access, "vehicle-notes")
+                ? VehicleNote.find({
+                    $or: [
+                        { "existingSpec.tyre.width": width, "existingSpec.tyre.aspect": aspect, "existingSpec.tyre.rim": rim },
+                        { "upgradedSpec.tyre.width": width, "upgradedSpec.tyre.aspect": aspect, "upgradedSpec.tyre.rim": rim },
+                    ],
+                })
+                    .select("-staffNotes -customer -createdBy")
+                    .limit(6)
+                    .lean()
+                : [],
         ]);
 
-        res.json({ presets, comparisons, plusSizeSaves, vehicles });
+        // `presets` is kept (always empty) so the response shape the client reads doesn't change.
+        res.json({ presets: [], comparisons, plusSizeSaves, vehicles });
     } catch (err) { next(err); }
 });
 
@@ -1910,7 +2019,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
         const [
             totalUsers,
             totalVehicles,
-            tirePresets,
+            // tirePresets, // hidden: "Tire presets" tile is switched off
             roleAgg,
             recentVehicles,
             recentTireComparisons,
@@ -1921,7 +2030,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
         ] = await Promise.all([
             User.countDocuments(),
             VehicleNote.countDocuments(),
-            TireOption.countDocuments(),
+            // TireOption.countDocuments(), // hidden: "Tire presets" tile is switched off
             User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
             VehicleNote.find().sort({ createdAt: -1 }).limit(5).select("name type model"),
             RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(5).lean(),
@@ -1947,7 +2056,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
 
         if (can("total-users")) summary.totalUsers = totalUsers;
         if (can("vehicle-notes")) summary.totalVehicles = totalVehicles;
-        if (can("tire-presets")) summary.tirePresets = tirePresets;
+        // if (can("tire-presets")) summary.tirePresets = tirePresets; // hidden: "Tire presets" tile is switched off
         if (can("users-by-role")) summary.usersByRole = usersByRole;
         if (can("recent-vehicles")) summary.recentVehicles = recentVehicles;
         if (can("recent-comparisons")) summary.recentTireComparisons = recentTireComparisons;
@@ -1990,7 +2099,7 @@ roleRouter.post("/", requirePermission("user-management"), async (req, res, next
     try {
         const { role_key, role_name } = req.body;
 
-        if (!role_key || !role_name) {
+        if (!isString(role_key) || !isString(role_name) || !role_key.trim() || !role_name.trim()) {
             return res.status(400).json({ message: "role_key and role_name are required." });
         }
 
@@ -2209,11 +2318,11 @@ reportsRouter.get("/summary", async (req, res, next) => {
         const range = parseDateRange(req);
         const createdAtFilter = range ? { createdAt: range } : {};
 
-        const [vehiclesAdded, tireComparisons, vehicleSearches, tirePresetsAdded] = await Promise.all([
+        const [vehiclesAdded, tireComparisons, vehicleSearches /*, tirePresetsAdded // hidden: Tire Size Option is switched off */] = await Promise.all([
             VehicleNote.countDocuments(createdAtFilter),
             RecentActivity.countDocuments({ type: "tire-comparison", ...createdAtFilter }),
             RecentActivity.countDocuments({ type: "vehicle-search", ...createdAtFilter }),
-            TireOption.countDocuments(createdAtFilter),
+            // TireOption.countDocuments(createdAtFilter), // hidden: Tire Size Option is switched off
         ]);
 
         res.json({
@@ -2221,7 +2330,7 @@ reportsRouter.get("/summary", async (req, res, next) => {
             vehiclesAdded,
             tireComparisons,
             vehicleSearches,
-            tirePresetsAdded,
+            // tirePresetsAdded, // hidden: Tire Size Option is switched off
         });
     } catch (err) { next(err); }
 });
@@ -2254,16 +2363,17 @@ const REPORT_EXPORTERS = {
         ],
         fetch: (filter) => RecentActivity.find({ type: "vehicle-search", ...filter }).sort({ createdAt: -1 }).lean(),
     },
-    "tire-options": {
-        columns: [
-            { key: "label", label: "Preset" },
-            { key: "width", label: "Width" },
-            { key: "aspect", label: "Aspect" },
-            { key: "rim", label: "Rim" },
-            { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
-        ],
-        fetch: (filter) => TireOption.find(filter).sort({ createdAt: -1 }).lean(),
-    },
+    // Hidden: Tire Size Option is switched off, so its CSV export is no longer offered.
+    // "tire-options": {
+    //     columns: [
+    //         { key: "label", label: "Preset" },
+    //         { key: "width", label: "Width" },
+    //         { key: "aspect", label: "Aspect" },
+    //         { key: "rim", label: "Rim" },
+    //         { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },
+    //     ],
+    //     fetch: (filter) => TireOption.find(filter).sort({ createdAt: -1 }).lean(),
+    // },
 };
 
 reportsRouter.get("/export", requirePermission("reports.download"), async (req, res, next) => {
@@ -2284,14 +2394,51 @@ reportsRouter.get("/export", requirePermission("reports.download"), async (req, 
     } catch (err) { next(err); }
 });
 
-app.use("/auth", authRouter);
+// ==========================================
+// MOUNT ROUTERS — order matters, top to bottom
+// ==========================================
+//  1. PUBLIC:  /health (registered above) and /auth (login, register, forgot /
+//     reset password). Tiny body limit: these accept anonymous callers.
+//  2. THE GATE: app.use(requireAuth). EVERYTHING mounted below it needs a valid
+//     login (Postman, Insomnia, curl, a browser address bar — all get 401 without
+//     one). This is deny-by-default: a router or route added later is protected
+//     automatically, it can't be "forgotten". Each router then adds its own
+//     authorization (requirePermission / requireAnyPermission / role checks).
+//  3. Only authenticated callers reach the 50 MB JSON parser and /uploads.
+app.use("/auth", express.json({ limit: process.env.AUTH_BODY_LIMIT || "10kb" }), ensureBody, rejectOperatorKeys, authRouter);
+
+app.use(requireAuth);
+app.use(express.json({ limit: "50mb" }));
+app.use(ensureBody);
+app.use(rejectOperatorKeys);
+
+// Vehicle photos (stored as files, see utils/vehicleImageStore.js). File names are
+// content hashes, so they never change. They are private data: a logged-in user
+// with access to at least one page may read them. PROTECT_UPLOADS=false switches
+// that check off, as a temporary rollback while the client is being updated.
+// `private` stops proxies/CDNs from caching photos for other people; the browser
+// can still cache them. A plain <img src> can't send the Authorization header, so
+// the client has to fetch photos with it (fetch -> blob URL).
+// (nginx's `location /uploads/` proxies here.)
+if (process.env.PROTECT_UPLOADS !== "false") {
+    app.use("/uploads", requireAnyPage);
+}
+app.use("/uploads", express.static(uploadRoot(), {
+    maxAge: "30d",
+    immutable: true,
+    index: false,
+    dotfiles: "deny",
+    redirect: false,
+    setHeaders: (res) => res.setHeader("Cache-Control", "private, max-age=2592000, immutable"),
+}));
+
 app.use("/users", userRouter);
 app.use("/permissions", permissionRouter);
 app.use("/vehicle-notes", vehicleNoteRouter);
 app.use("/customers", customerRouter);
 app.use("/saved-comparisons", savedComparisonRouter);
 app.use("/vehicle-lookup", vehicleLookupRouter);
-app.use("/tire-options", tireOptionRouter);
+// app.use("/tire-options", tireOptionRouter); // hidden: Tire Size Option is switched off (router above is kept; uncomment to bring it back)
 app.use("/plus-size", plusSizeRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/activity", activityRouter);

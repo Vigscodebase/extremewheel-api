@@ -2,24 +2,53 @@
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { signToken, verifyToken } from "../utils/jwt.js";
-import { ancestorsOf, isKnownPermission } from "../config/permissionCatalog.js";
+import { ALL_PERMISSION_KEYS, ancestorsOf, isKnownPermission } from "../config/permissionCatalog.js";
 
 // const RENEW_THRESHOLD_SECONDS = Number(process.env.JWT_RENEW_THRESHOLD_SECONDS) || 5 * 60; // rolling-refresh window
 
+const BEARER = /^Bearer\s+(\S+)$/i;
+
+const unauthorized = (res, message) => {
+  res.set("WWW-Authenticate", 'Bearer realm="api"');
+  return res.status(401).json({ message });
+};
+
+/**
+ * AUTHENTICATE. Proves who is calling and loads their CURRENT account.
+ *
+ * The JWT is only used to find out WHICH account is calling. Everything else
+ * (role, email, name, permissions) is read from the database on every request,
+ * because login tokens never expire: a token minted before an admin demoted the
+ * user, changed their email, or deleted the account would otherwise keep its old
+ * role forever. `req.user` is therefore built from the database, never from the
+ * token, so every `req.user.role` check in the app is automatically fresh.
+ *
+ * A token is also refused if it was issued before the account's
+ * `tokensValidAfter` (set when the password, email or role changes), so changing
+ * or resetting a password signs out every device that was using the old one.
+ *
+ * Idempotent: server.js runs this once as a gate in front of every non-public
+ * route; the router-level / route-level calls then pass straight through.
+ */
 export const requireAuth = async (req, res, next) => {
   try {
+    if (req.user && req.access) return next();
+
     // 1. Get the token from the request
-    let token;
-    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
-      token = req.headers.authorization.split(" ")[1];
-    }
+    const match = BEARER.exec(req.headers.authorization || "");
+    if (!match) return unauthorized(res, "Not authorized, no token provided.");
 
-    if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token provided." });
+    // 2. Verify the token (signature; RS256 only — see utils/jwt.js)
+    let decoded;
+    try {
+      decoded = verifyToken(match[1]);
+    } catch {
+      return unauthorized(res, "Not authorized, token failed or expired.");
     }
-
-    // 2. Verify the token
-    const decoded = verifyToken(token);
+    const id = decoded?._id || decoded?.id;
+    if (!id || !mongoose.isValidObjectId(id)) {
+      return unauthorized(res, "Not authorized, token failed or expired.");
+    }
 
     /*
      * ============================================================
@@ -55,15 +84,42 @@ export const requireAuth = async (req, res, next) => {
     }
     */
 
-    // 4. Attach user to request and continue
-    req.user = decoded; // Or fetch full user from DB if needed: await User.findById(decoded._id)
-    next();
+    // 4. Load the CURRENT account. A database error is a 500 (via next(err)),
+    //    not a 401: clients that sign the user out on 401 must not do so just
+    //    because the database hiccuped.
+    const fresh = await User.findById(id)
+      .select("name email role permissions +tokensValidAfter")
+      .lean();
+    if (!fresh) return notAuthorized(res);
 
+    if (fresh.tokensValidAfter) {
+      const validAfter = Math.floor(new Date(fresh.tokensValidAfter).getTime() / 1000);
+      if (!(decoded.iat >= validAfter)) {
+        return unauthorized(res, "Not authorized, please sign in again.");
+      }
+    }
+
+    // 5. Attach the CURRENT user (same shape the token used to give) and their
+    //    access, so the permission guards below don't query again.
+    req.user = { _id: String(fresh._id), name: fresh.name, email: fresh.email, role: fresh.role };
+    req.access = buildAccess(fresh);
+    next();
   } catch (error) {
-    // If the token is already expired, verifyToken throws an error, resulting in a 401
-    return res.status(401).json({ message: "Not authorized, token failed or expired." });
+    next(error);
   }
 };
+
+function buildAccess(user) {
+  return {
+    email: user.email,
+    role: user.role,
+    // The one role-based rule that remains: an admin account is the master
+    // account and always holds every permission (so nobody can be locked out
+    // of User Management). Everything else is purely per-user grants.
+    isAdmin: user.role === "admin",
+    permissions: new Set(user.permissions || []),
+  };
+}
 
 /**
  * Per-user access, looked up FRESH from the database on every guarded request
@@ -88,15 +144,7 @@ export async function loadAccess(req) {
   const fresh = await User.findById(id).select("email role permissions").lean();
   if (!fresh) return null;
 
-  req.access = {
-    email: fresh.email,
-    role: fresh.role,
-    // The one role-based rule that remains: an admin account is the master
-    // account and always holds every permission (so nobody can be locked out
-    // of User Management). Everything else is purely per-user grants.
-    isAdmin: fresh.role === "admin",
-    permissions: new Set(fresh.permissions || []),
-  };
+  req.access = buildAccess(fresh);
   return req.access;
 }
 
@@ -120,8 +168,9 @@ function assertKnownKeys(keys) {
   }
 }
 
-const notAuthorized = (res) =>
-  res.status(401).json({ message: "Not authorized, this account no longer exists." });
+function notAuthorized(res) {
+  return unauthorized(res, "Not authorized, this account no longer exists.");
+}
 
 /**
  * Guard a route by a permission key — a page ("user-management") or an element
@@ -179,3 +228,30 @@ export function requireAnyPermission(...requiredKeys) {
     }
   };
 }
+
+// Every top-level page key ("dashboard", "vehicle-notes", …) — i.e. every
+// permission that is not an element inside a page.
+const PAGE_KEYS = ALL_PERMISSION_KEYS.filter((k) => ancestorsOf(k).length === 0);
+
+/**
+ * For shared helper endpoints that several pages read (recent activity, the
+ * tire preset list, …): the caller must have been granted at least ONE page.
+ * An account with no grants at all (a fresh self-registered "guest") gets 403
+ * instead of being treated as "any logged-in user is fine". Admins always pass.
+ */
+export const requireAnyPage = async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: "Not authenticated." });
+
+    const access = await loadAccess(req);
+    if (!access) return notAuthorized(res);
+
+    if (PAGE_KEYS.some((key) => hasPermission(access, key))) return next();
+
+    return res.status(403).json({
+      message: "Access Denied: your account hasn't been granted access to any page.",
+    });
+  } catch (err) {
+    next(err);
+  }
+};

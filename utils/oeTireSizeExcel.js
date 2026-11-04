@@ -134,5 +134,8 @@ export function buildOeTireSizeWorkbook(rows) {
 
 /** Fetches every oe_tiresize row (sorted for a stable, readable export). */
 export async function fetchAllOeTireSizesForExport() {
-  return OeTireSize.find().sort({ rim: 1, width: 1, aspect: 1 }).lean();
+  // Hidden: rows synced from Tire Size Option presets (source "tire-options") are left out
+  // of the export too, since Tire Size Option is switched off. Remove the filter to include them.
+  // return OeTireSize.find().sort({ rim: 1, width: 1, aspect: 1 }).lean();
+  return OeTireSize.find({ source: { $ne: "tire-options" } }).sort({ rim: 1, width: 1, aspect: 1 }).lean();
 }
