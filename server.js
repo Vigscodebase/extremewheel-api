@@ -1365,10 +1365,20 @@ vehicleLookupRouter.get("/makes", requireAuth, requireAnyPermission("vehicle-not
 // The Save comparison popup on the Tire Size Comparison page uses the same
 // Make / Model / Type / Year dropdowns, so those four read-only lists are also
 // readable with "tire-comparison.save". Everything else on this router
-// (export, import, quick-add, delete) still needs Vehicle Notes access.
+// (quick-add, delete) still needs Vehicle Notes access.
+//
+// The one exception is the database download / upload (GET /export, POST
+// /import): those buttons now live on Reporting & Data Export, so they are
+// guarded only by their own element permissions further down
+// (vehicle-notes.database.download / .upload, which sit under "reports") and
+// skip this Vehicle Notes page guard. Any other path or method — including a
+// slightly different spelling of these two — still goes through it.
 const lookupReadGuard = requireAnyPermission("vehicle-notes", "tire-comparison.save");
 const lookupFullGuard = requirePermission("vehicle-notes");
+const isDatabaseTransfer = (req) =>
+    (req.method === "GET" && req.path === "/export") || (req.method === "POST" && req.path === "/import");
 vehicleLookupRouter.use(requireAuth, (req, res, next) => {
+    if (isDatabaseTransfer(req)) return next();
     const isListRead = req.method === "GET" && ["/models", "/types", "/years"].includes(req.path);
     return (isListRead ? lookupReadGuard : lookupFullGuard)(req, res, next);
 });
@@ -1707,7 +1717,17 @@ tireOptionRouter.delete("/:id", requireAuth, requirePermission("tire-options"), 
 
 // --- Plus Size Recommendation Routes ---
 const plusSizeRouter = express.Router();
-plusSizeRouter.use(requireAuth, requirePermission("plus-size"));
+// Everything here needs the Plus Size Options page, except the OE library
+// download / upload: those buttons now live on Reporting & Data Export, so they
+// are guarded only by their own element permissions (plus-size.download /
+// plus-size.upload, which sit under "reports"). Anything else — including a
+// different spelling of those two paths — still goes through the page guard.
+const plusSizePageGuard = requirePermission("plus-size");
+const isOeLibraryTransfer = (req) =>
+    (req.method === "POST" && req.path === "/oe-tiresize/import") ||
+    (req.method === "GET" && req.path === "/oe-tiresize/export");
+plusSizeRouter.use(requireAuth, (req, res, next) =>
+    isOeLibraryTransfer(req) ? next() : plusSizePageGuard(req, res, next));
 
 const PLUS_SIZE_HEIGHT_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_HEIGHT_TOLERANCE_PCT) || 0.03;
 const PLUS_SIZE_TREAD_TOLERANCE_PCT = Number(process.env.PLUS_SIZE_TREAD_TOLERANCE_PCT) || 0.15;
@@ -1858,7 +1878,8 @@ plusSizeRouter.post("/search", async (req, res, next) => {
 // the same buffer-download shape as /vehicle-lookup/export — see
 // utils/oeTireSizeExcel.js. Upload is insert-only (a duplicate width/
 // aspect/rim is left exactly as it is, never overwritten). Upload and download
-// are each their own per-user permission (plus-size.upload / plus-size.download).
+// are each their own per-user permission (plus-size.upload / plus-size.download),
+// granted under Reporting & Data Export, where the buttons now live.
 plusSizeRouter.post("/oe-tiresize/import", requirePermission("plus-size.upload"), async (req, res, next) => {
     try {
         const { fileBase64, fileName } = req.body;
@@ -2133,7 +2154,14 @@ navigationRouter.get("/", (req, res, next) => {
 const appGuideRouter = express.Router();
 appGuideRouter.use(requireAuth);
 
-appGuideRouter.use(requireAnyPermission("application-guide", "tech-data"));
+// The Tech Data CSV download / upload (GET /export, POST /import) is the one
+// exception: those buttons now live on Reporting & Data Export, so they are
+// guarded only by their own element permission (tech-data.csv-tab, which sits
+// under "reports") and skip this page-level guard.
+const appGuidePageGuard = requireAnyPermission("application-guide", "tech-data");
+const isTechDataCsvTransfer = (req) =>
+    (req.method === "GET" && req.path === "/export") || (req.method === "POST" && req.path === "/import");
+appGuideRouter.use((req, res, next) => (isTechDataCsvTransfer(req) ? next() : appGuidePageGuard(req, res, next)));
 const APP_GUIDE_CACHE_TTL_SECONDS = Number(process.env.APP_GUIDE_CACHE_TTL_SECONDS) || 3600;
 
 appGuideRouter.get("/years", async (req, res, next) => {
@@ -2226,7 +2254,8 @@ const TECH_DATA_CSV_COLUMNS = [
     { key: "bigBrake", label: "Big Brake" },
 ];
 
-// The Tech Data "CSV import / export" tab: both directions need its permission.
+// The Tech Data CSV download / upload buttons (on Reporting & Data Export): both
+// directions need the same permission.
 appGuideRouter.get("/export", requirePermission("tech-data.csv-tab"), async (req, res, next) => {
     try {
         const { year, make, model } = req.query;

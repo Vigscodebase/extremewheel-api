@@ -9,10 +9,9 @@
 //   - PAGE keys    e.g. "vehicle-notes"       -> may open the page / call its API
 //   - ELEMENT keys e.g. "vehicle-notes.edit"  -> may use one control on that page
 //
-// Element keys form a tree under their page (and sometimes under another
-// element: the Vehicle Notes database buttons sit under the database card). A
-// key only counts when EVERY ancestor is also granted, so revoking a page
-// automatically switches off everything inside it.
+// Element keys form a tree under their page (and can sit under another
+// element). A key only counts when EVERY ancestor is also granted, so revoking
+// a page automatically switches off everything inside it.
 //
 // The client mirrors this list in client/src/utils/permissions.js — when you
 // add a key, add it in both places (and give the route/button a guard).
@@ -63,23 +62,23 @@ export const ELEMENT_PERMISSIONS = [
     // Tire Size Comparison
     el("tire-comparison.save", "Save comparison button", "tire-comparison"),
 
-    // Plus Size Options
-    el("plus-size.download", "Download OE library button", "plus-size"),
-    el("plus-size.upload", "Upload OE sizes button", "plus-size"),
-
-    // Tech Data — only the second tab (CSV import / export)
-    el("tech-data.csv-tab", "CSV import / export tab", "tech-data"),
-
     // Vehicle Notes
     el("vehicle-notes.add", "Add vehicle button", "vehicle-notes"),
     el("vehicle-notes.edit", "Edit button (on each vehicle)", "vehicle-notes"),
     el("vehicle-notes.delete", "Delete button (on each vehicle)", "vehicle-notes"),
-    el("vehicle-notes.database", "Vehicle Notes database", "vehicle-notes"),
-    el("vehicle-notes.database.download", "Download database button", "vehicle-notes.database"),
-    el("vehicle-notes.database.upload", "Upload database button", "vehicle-notes.database"),
 
-    // Reports
-    el("reports.download", "Download CSV button", "reports"),
+    // Reporting & Data Export — the per-report CSV downloads, plus the data
+    // library import / export buttons that used to sit on Plus Size Options,
+    // Tech Data and Vehicle Notes. Those keys keep their original names on
+    // purpose (renaming would orphan every grant already stored on a user);
+    // only their parent changed, so they now need the Reports page instead of
+    // the page they used to live on.
+    el("reports.download", "Download report CSV buttons", "reports"),
+    el("plus-size.download", "Download OE library button", "reports"),
+    el("plus-size.upload", "Upload OE sizes button", "reports"),
+    el("tech-data.csv-tab", "Tech Data CSV download / upload buttons", "reports"),
+    el("vehicle-notes.database.download", "Download database button", "reports"),
+    el("vehicle-notes.database.upload", "Upload database button", "reports"),
 ];
 
 // Element permissions that are switched off in the UI (not on the permissions
@@ -88,6 +87,9 @@ export const ELEMENT_PERMISSIONS = [
 // ELEMENT_PERMISSIONS (and into the client mirror).
 export const HIDDEN_ELEMENT_PERMISSIONS = [
     el("dashboard.tile.tire-presets", "Tire presets count", "dashboard"),
+    // The Vehicle Notes database card moved to Reporting & Data Export, so this
+    // no longer gates anything. Kept valid so existing grants aren't discarded.
+    el("vehicle-notes.database", "Vehicle Notes database", "vehicle-notes"),
 ];
 export const HIDDEN_ELEMENT_KEYS = HIDDEN_ELEMENT_PERMISSIONS.map((e) => e.key);
 
