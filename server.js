@@ -1753,6 +1753,11 @@ plusSizeRouter.post("/search", async (req, res, next) => {
         // this destructure and the two blocks below once the frontend
         // fields are fixed to send `undefined` (not `0`/`""`) when empty.
         // const { targetRim, heightTolerancePct, treadTolerancePct, sortBy } = req.body;
+        // targetRim ("New rim" on the Plus Size page) is the one override that is
+        // live again: it only narrows which rim the matches come from. It is
+        // ignored when blank/non-numeric, so it can never reproduce the
+        // "0% tolerance" empty-field bug described above.
+        const { targetRim } = req.body;
         const oe = { width: Number(width), aspect: Number(aspect), rim: Number(rim) };
         if (!oe.width || !oe.aspect || !oe.rim) {
             return res.status(400).json({ message: "OE width, aspect and rim are required." });
@@ -1795,8 +1800,9 @@ plusSizeRouter.post("/search", async (req, res, next) => {
             // user, admin included. Remove this line to show them again.
             source: { $ne: "tire-options" },
         };
-        // TEMPORARILY DISABLED — targetRim narrowing (see note above).
-        // if (targetRim) query.rim = Number(targetRim);
+        // targetRim narrowing ("New rim") — see the note above.
+        const targetRimNum = Number(targetRim);
+        if (Number.isFinite(targetRimNum) && targetRimNum > 0) query.rim = targetRimNum;
         const heightMatches = await OeTireSize.find(query).lean();
 
         // Step 3: tread width — diff vs the OE from the precomputed treadWidthIn (display + ranking only, NOT a filter)
