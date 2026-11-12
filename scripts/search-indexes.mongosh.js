@@ -22,10 +22,25 @@ db.vehiclenotes.createIndex({ year: 1, createdAt: -1, _id: -1 }, { name: "vn_yea
 db.vehiclenotes.createIndex({ customer: 1, createdAt: -1, _id: -1 }, { name: "vn_customer_created_idx" });
 // multikey (array of word prefixes) — powers type-ahead
 db.vehiclenotes.createIndex({ searchTokens: 1, createdAt: -1, _id: -1 }, { name: "vn_search_tokens_idx" });
-// text index — whole-word / stemmed fallback search
+// Modification checkboxes (Lifted / Lowered / Stock) — multikey
+db.vehiclenotes.createIndex({ modification: 1, createdAt: -1, _id: -1 }, { name: "vn_modification_created_idx" });
+// text index — whole-word / stemmed fallback search.
+// Its fields changed (type removed; submodel, modification and description
+// added). MongoDB allows only ONE text index per collection and refuses to
+// "re-create" an existing name with different fields, so drop the old one
+// first. Safe on a fresh database too (nothing to drop).
+var oldVnText = db.vehiclenotes.getIndexes().find((i) => i.name === "vn_text_idx");
+if (oldVnText && !("submodel" in (oldVnText.weights || {}))) {
+  print("Replacing old vn_text_idx (type -> submodel / modification / description) ...");
+  db.vehiclenotes.dropIndex("vn_text_idx");
+}
 db.vehiclenotes.createIndex(
-  { name: "text", make: "text", model: "text", type: "text", year: "text" },
-  { name: "vn_text_idx", weights: { name: 10, make: 5, model: 5, type: 3, year: 1 }, default_language: "english" }
+  { name: "text", make: "text", model: "text", submodel: "text", year: "text", modification: "text", description: "text" },
+  {
+    name: "vn_text_idx",
+    weights: { name: 10, make: 5, model: 5, submodel: 3, modification: 3, description: 2, year: 1 },
+    default_language: "english",
+  }
 );
 
 // ------------------------------------------------------------ Saved Comparisons
@@ -61,4 +76,4 @@ db.users.createIndex(
   { name: "us_text_idx", weights: { name: 10, email: 5 }, default_language: "english" }
 );
 
-print("Search / pagination indexes are in place. Now run:  npm run backfill:search-tokens");
+print("Search / pagination indexes are in place. Now run:  node scripts/backfillSearchTokens.js --force   (rebuilds Vehicle Notes tokens: type removed, submodel + modification added)");

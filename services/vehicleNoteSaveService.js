@@ -3,7 +3,7 @@
 //  - the route handlers' inline fallback (when Redis is unavailable),
 // so both produce exactly the same result.
 import crypto from "crypto";
-import VehicleNote from "../models/VehicleNote.js";
+import VehicleNote, { MODIFICATION_OPTIONS } from "../models/VehicleNote.js";
 import { externalizeVehicleImages } from "../utils/vehicleImageStore.js";
 
 export class SaveError extends Error {
@@ -49,6 +49,41 @@ export function normalizeSpec(spec) {
     };
 }
 
+
+/**
+ * "205/55R16", "205-55-16", "LT265/70R17" or "205 55 16" -> "205 55 16"
+ * (the format used in tblAppGuide-Templatenew.xlsx). Empty -> "".
+ * Anything that isn't exactly width / aspect / rim is refused.
+ */
+export function normalizeTireSize(raw) {
+    if (raw === undefined || raw === null) return undefined;
+    const text = String(raw).trim();
+    if (!text) return "";
+    const nums = text.match(/\d+/g) || [];
+    const [w, a, r] = nums.map(Number);
+    const ok = nums.length === 3 && w >= 105 && w <= 495 && a >= 20 && a <= 95 && r >= 10 && r <= 30;
+    if (!ok) throw new SaveError(400, `"${text}" is not a valid tire size. Use width / aspect / rim, e.g. 205 55 16.`);
+    return `${w} ${a} ${r}`;
+}
+
+/** Wheel offset in mm. "" / null clears it (null), undefined = not sent. */
+export function normalizeOffset(raw, label) {
+    if (raw === undefined) return undefined;
+    if (raw === null || raw === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < -200 || n > 200) throw new SaveError(400, `${label} must be a number between -200 and 200 (mm).`);
+    return Math.round(n);
+}
+
+/** Keeps only the known Lifted / Lowered / Stock values, no duplicates. */
+export function normalizeModification(raw) {
+    if (raw === undefined) return undefined;
+    const list = Array.isArray(raw) ? raw : [];
+    return [...new Set(list.map((v) => String(v).trim().toLowerCase()))].filter((v) => MODIFICATION_OPTIONS.includes(v));
+}
+
+const cleanText = (raw, max) => (raw === undefined ? undefined : String(raw ?? "").trim().slice(0, max));
+
 /**
  * Whitelist the fields a save may carry. Used by the route before enqueueing so
  * the job (which sits in Redis) never contains anything unexpected.
@@ -57,11 +92,31 @@ export function pickVehicleInput(body) {
     const {
         name, make, type, model, year, image, beforeImage, afterImage, gallery,
         offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes,
+        submodel, frontTireSize, rearTireSize, frontWheelOffset, rearWheelOffset, modification, description,
     } = body || {};
     return {
         name, make, type, model, year, image, beforeImage, afterImage, gallery,
         offsetNotes, existingSpec, upgradedSpec, eventDate, staffNotes,
+        submodel, frontTireSize, rearTireSize, frontWheelOffset, rearWheelOffset, modification, description,
     };
+}
+
+/**
+ * Checks the new fitment fields BEFORE a save is queued, so a typo such as a
+ * malformed tire size is answered with a 400 while the form is still open
+ * instead of failing later in the background worker. Returns a message or "".
+ */
+export function validateVehicleInput(input) {
+    try {
+        normalizeTireSize(input.frontTireSize);
+        normalizeTireSize(input.rearTireSize);
+        normalizeOffset(input.frontWheelOffset, "Front wheel offset");
+        normalizeOffset(input.rearWheelOffset, "Rear wheel offset");
+        return "";
+    } catch (err) {
+        if (err instanceof SaveError) return err.message;
+        throw err;
+    }
 }
 
 /** Only what the Redis job / WebSocket needs to know about the person saving. */
@@ -92,6 +147,9 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
 
     if (kind === "create") {
         const { staffNotes, gallery, eventDate, existingSpec, upgradedSpec, ...rest } = input;
+        const description = cleanText(rest.description, 2000);
+        const frontOffset = normalizeOffset(rest.frontWheelOffset, "Front wheel offset");
+        const rearOffset = normalizeOffset(rest.rearWheelOffset, "Rear wheel offset");
         const mappedNotes = Array.isArray(staffNotes)
             ? staffNotes.map((n) => ({
                 text: n.text,
@@ -108,6 +166,13 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
             type: rest.type,
             model: rest.model,
             year: rest.year,
+            submodel: cleanText(rest.submodel, 80),
+            frontTireSize: normalizeTireSize(rest.frontTireSize),
+            rearTireSize: normalizeTireSize(rest.rearTireSize),
+            ...(frontOffset !== null && frontOffset !== undefined && { frontWheelOffset: frontOffset }),
+            ...(rearOffset !== null && rearOffset !== undefined && { rearWheelOffset: rearOffset }),
+            modification: normalizeModification(rest.modification) || [],
+            description,
             image: rest.image,
             beforeImage: rest.beforeImage,
             afterImage: rest.afterImage,
@@ -123,7 +188,28 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
     }
 
     if (kind === "update") {
-        const { name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate } = input;
+        const {
+            name, make, type, model, year, image, beforeImage, afterImage, gallery, offsetNotes, existingSpec, upgradedSpec, eventDate,
+            submodel, frontTireSize, rearTireSize, frontWheelOffset, rearWheelOffset, modification, description,
+        } = input;
+
+        // The card shows "Updated <date>" only once the description really
+        // changed, so compare with what is stored before writing.
+        const nextDescription = cleanText(description, 2000);
+        let descriptionChanged = false;
+        if (nextDescription !== undefined) {
+            const current = await VehicleNote.findById(vehicleId).select("description").lean();
+            if (!current) throw new SaveError(404, "Vehicle not found.");
+            descriptionChanged = (current.description || "") !== nextDescription;
+        }
+        const frontOffset = normalizeOffset(frontWheelOffset, "Front wheel offset");
+        const rearOffset = normalizeOffset(rearWheelOffset, "Rear wheel offset");
+        const unset = {
+            ...(customerField.clear && { customer: 1 }),
+            ...(frontOffset === null && { frontWheelOffset: 1 }),
+            ...(rearOffset === null && { rearWheelOffset: 1 }),
+        };
+
         const vehicle = await VehicleNote.findByIdAndUpdate(
             vehicleId,
             {
@@ -133,6 +219,14 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
                 ...(type && { type }),
                 ...(model && { model }),
                 ...(year !== undefined && { year }),
+                ...(submodel !== undefined && { submodel: cleanText(submodel, 80) }),
+                ...(frontTireSize !== undefined && { frontTireSize: normalizeTireSize(frontTireSize) }),
+                ...(rearTireSize !== undefined && { rearTireSize: normalizeTireSize(rearTireSize) }),
+                ...(typeof frontOffset === "number" && { frontWheelOffset: frontOffset }),
+                ...(typeof rearOffset === "number" && { rearWheelOffset: rearOffset }),
+                ...(modification !== undefined && { modification: normalizeModification(modification) }),
+                ...(nextDescription !== undefined && { description: nextDescription }),
+                ...(descriptionChanged && { descriptionUpdatedAt: new Date() }),
                 ...(image !== undefined && { image }),
                 ...(beforeImage !== undefined && { beforeImage }),
                 ...(afterImage !== undefined && { afterImage }),
@@ -141,7 +235,7 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
                 ...(existingSpec !== undefined && { existingSpec: normalizeSpec(existingSpec) }),
                 ...(upgradedSpec !== undefined && { upgradedSpec: normalizeSpec(upgradedSpec) }),
                 ...(eventDate !== undefined && { eventDate: eventDate ? new Date(eventDate) : null }),
-                ...(customerField.clear && { $unset: { customer: 1 } }),
+                ...(Object.keys(unset).length && { $unset: unset }),
             },
             { new: true }
         );
@@ -162,6 +256,7 @@ export function summarizeVehicle(doc) {
         model: v.model,
         type: v.type,
         year: v.year,
+        submodel: v.submodel,
     };
 }
 

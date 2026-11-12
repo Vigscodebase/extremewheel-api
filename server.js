@@ -18,7 +18,7 @@ import rateLimit from "express-rate-limit";
 // Models
 import User from "./models/User.js";
 import TireOption from "./models/TireOption.js";
-import VehicleNote from "./models/VehicleNote.js";
+import VehicleNote, { MODIFICATION_OPTIONS } from "./models/VehicleNote.js";
 import Customer from "./models/Customer.js";
 import SavedComparison from "./models/SavedComparison.js";
 import VehicleLookup from "./models/VehicleLookup.js";
@@ -51,6 +51,7 @@ import { attachSocketServer, issueWsTicket } from "./realtime/socketServer.js";
 import {
     normalizeSpec,
     pickVehicleInput,
+    validateVehicleInput,
     pickUser,
     saveVehicleNote,
     cleanClientRef,
@@ -666,7 +667,7 @@ const parseYearParam = (raw) => (/^\d{4}$/.test(cleanString(raw)) ? cleanString(
 
 // Which stored field each kind of suggestion (see /suggest below) points at.
 // "customer" is handled separately (applyCustomerPick): it is a lookup, not a field.
-const PICK_FIELDS = { vehicle: "name", make: "make", model: "model", year: "year" };
+const PICK_FIELDS = { vehicle: "name", make: "make", model: "model", submodel: "submodel", year: "year" };
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // "equals this text", ignoring case and surrounding spaces.
@@ -699,8 +700,9 @@ async function applyCustomerPick(filters, text) {
     filters.customer = { $in: ids };
 }
 
-// Make / Model / Type / Customer / Year-range filters, as the raw params (these
-// seal into the cursor) and the equivalent MongoDB filter.
+// Make / Model / Modification / Year-range filters (plus Type and Customer,
+// which the page no longer offers but the API still understands), as the raw
+// params (these seal into the cursor) and the equivalent MongoDB filter.
 function vehicleListFilters(query, req) {
     const params = {};
     const filters = {};
@@ -712,6 +714,14 @@ function vehicleListFilters(query, req) {
     if (customer && canViewCustomers(req) && mongoose.isValidObjectId(customer)) {
         params.customer = customer;
         filters.customer = customer;
+    }
+    // Modification checkboxes (?modification=lifted,lowered): a vehicle matches
+    // when it has ANY of the ticked choices. Unknown values are ignored.
+    const modification = [...new Set(cleanString(query.modification).toLowerCase().split(",").map((v) => v.trim()))]
+        .filter((v) => MODIFICATION_OPTIONS.includes(v));
+    if (modification.length) {
+        params.modification = modification.join(",");
+        filters.modification = { $in: modification };
     }
     const yearFrom = parseYearParam(query.yearFrom);
     const yearTo = parseYearParam(query.yearTo);
@@ -740,15 +750,21 @@ vehicleNoteRouter.get("/page", pageRoute(async (req, res) => {
     // happen to be Ford / Transit 350).
     const pickKind = exact && q ? String(req.query.pick || "") : "";
     const pickField = PICK_FIELDS[pickKind];
-    if (pickField || (pickKind === "customer" && canViewCustomers(req))) {
-        if (pickField) applyPickFilter(filters, pickField, q);
-        else await applyCustomerPick(filters, q);
+    // HIDDEN: picking a customer suggestion (customer search is switched off).
+    // if (pickField || (pickKind === "customer" && canViewCustomers(req))) {
+    if (pickField) {
+        applyPickFilter(filters, pickField, q);
+        // else await applyCustomerPick(filters, q);
         params.pick = pickKind;
         params.pickText = q; // seals into the cursor, so page 2 keeps the same filter
         q = "";
         exact = false;
     }
-    const customerIds = await matchingCustomerIds(req, q, exact);
+    // HIDDEN: searching by customer name is switched off (the Customer field is
+    // hidden on the page). To bring it back, restore the next line and the
+    // customer suggestions in /suggest below.
+    // const customerIds = await matchingCustomerIds(req, q, exact);
+    const customerIds = [];
     const staff = canViewCustomers(req);
     const result = await keysetPage({
         Model: VehicleNote,
@@ -774,15 +790,17 @@ vehicleNoteRouter.get("/suggest", pageRoute(async (req, res) => {
     const suggestions = await suggest({
         Model: VehicleNote,
         q,
-        select: "name make model year",
-        caps: { make: 2, model: 2, year: 2, customer: 3 },
+        select: "name make model submodel year",
+        caps: { make: 2, model: 2, submodel: 2, year: 2 },
         candidates: (v) => [
             { text: v.name, kind: "vehicle" },
             { text: v.make, kind: "make" },
             { text: v.model, kind: "model" },
+            { text: v.submodel, kind: "submodel" },
             { text: v.year, kind: "year" },
         ],
-        extra: canViewCustomers(req) ? () => customerSuggestions(q) : undefined,
+        // HIDDEN: customer-name suggestions (customer search is switched off).
+        // extra: canViewCustomers(req) ? () => customerSuggestions(q) : undefined,
     });
     res.set("Cache-Control", "private, max-age=30");
     res.json({ suggestions });
@@ -896,9 +914,12 @@ vehicleNoteRouter.post("/", requireAuth, requirePermission("vehicle-notes.add"),
     try {
         const input = pickVehicleInput(req.body);
 
-        if (!input.name || !input.make || !input.model || !input.type) {
-            return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
+        // Type is hidden on the form now, so it is no longer required.
+        if (!input.name || !input.make || !input.model) {
+            return res.status(400).json({ message: "Vehicle name, make and model are required." });
         }
+        const inputError = validateVehicleInput(input);
+        if (inputError) return res.status(400).json({ message: inputError });
 
         const customerField = await resolveCustomerField(req, req.body.customer);
         if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
@@ -924,10 +945,14 @@ vehicleNoteRouter.put("/:id", requireAuth, requirePermission("vehicle-notes.edit
         const customerField = await resolveCustomerField(req, req.body.customer);
         if (customerField.error) return res.status(customerField.error.status).json({ message: customerField.error.message });
 
+        const input = pickVehicleInput(req.body);
+        const inputError = validateVehicleInput(input);
+        if (inputError) return res.status(400).json({ message: inputError });
+
         await dispatchVehicleSave(req, res, {
             kind: "update",
             vehicleId: String(req.params.id),
-            input: pickVehicleInput(req.body),
+            input,
             customerField,
             clientRef: cleanClientRef(req.body.clientRef),
         });
@@ -2059,7 +2084,7 @@ dashboardRouter.get("/summary", requireAuth, async (req, res, next) => {
             VehicleNote.countDocuments(),
             // TireOption.countDocuments(), // hidden: "Tire presets" tile is switched off
             User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
-            VehicleNote.find().sort({ createdAt: -1 }).limit(5).select("name type model"),
+            VehicleNote.find().sort({ createdAt: -1 }).limit(5).select("name make type model"),
             RecentActivity.find({ type: "tire-comparison" }).sort({ createdAt: -1 }).limit(5).lean(),
             RecentActivity.find({ type: "vehicle-search" }).sort({ createdAt: -1 }).limit(5).lean(),
             RecentActivity.find({ type: "plus-size" }).sort({ createdAt: -1 }).limit(5).lean(),
@@ -2377,6 +2402,13 @@ const REPORT_EXPORTERS = {
             { key: "make", label: "Make" },
             { key: "model", label: "Model" },
             { key: "type", label: "Type" },
+            { key: "submodel", label: "Submodel" },
+            { key: (r) => (r.modification || []).join(", "), label: "Modification" },
+            { key: "frontTireSize", label: "Front Tire Size" },
+            { key: "rearTireSize", label: "Rear Tire Size" },
+            { key: "frontWheelOffset", label: "Front Wheel Offset" },
+            { key: "rearWheelOffset", label: "Rear Wheel Offset" },
+            { key: "description", label: "Description" },
             { key: "year", label: "Year" },
             { key: (r) => (r.eventDate ? new Date(r.eventDate).toISOString() : ""), label: "Event Date" },
             { key: (r) => (r.createdAt ? new Date(r.createdAt).toISOString() : ""), label: "Created At" },

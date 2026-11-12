@@ -34,7 +34,8 @@ const force = process.argv.includes("--force");
 
 // One entry per searchable collection. `fields` must mirror the plugin config in the model.
 const TARGETS = [
-  { Model: VehicleNote, project: "name make model type year", fields: (d) => [d.name, d.make, d.model, d.type, d.year] },
+  // Mirrors models/VehicleNote.js: "type" is no longer searchable; submodel + modification are.
+  { Model: VehicleNote, project: "name make model submodel year modification", fields: (d) => [d.name, d.make, d.model, d.submodel, d.year, d.modification] },
   {
     Model: SavedComparison,
     project: "name make model type year comparison",
