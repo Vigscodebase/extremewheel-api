@@ -16,6 +16,7 @@
     "worker:tire-sizes": "node workers/tireSizesWorker.js",
     "migrate:permissions": "node scripts/migrateRolePermissionsToUsers.js",
     "backfill:search-tokens": "node scripts/backfillSearchTokens.js",
+    "seed:vehicle-lookup-options": "node scripts/seedVehicleLookupOptions.js",
     "migrate:vehicle-images": "node scripts/migrateVehicleNoteImages.js",
     "cleanup:vehicle-images": "node scripts/cleanupOrphanImages.js"
   },

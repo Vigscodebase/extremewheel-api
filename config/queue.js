@@ -22,6 +22,12 @@ export const VEHICLE_NOTE_QUEUE = "vehicle-note-saves";
 // whether the worker runs inside the API process, in its own process, or the
 // API runs as several instances.
 export const SAVE_EVENTS_CHANNEL = "vehicle-notes:save-events";
+// "This user's access changed" signals (type: "permissions-changed" |
+// "session-revoked"). Same idea as above: the API instance that handled the
+// admin's change publishes, EVERY API instance that holds that user's WebSocket
+// relays it. The message carries only { type, userId } - never the permission
+// keys themselves; the browser re-reads those over authenticated HTTPS.
+export const PERMISSION_EVENTS_CHANNEL = "permissions:events";
 
 const tag = (name) => `[Redis:${name}]`;
 
@@ -120,18 +126,37 @@ export function isRedisReady() {
     return Boolean(sharedConn?.isReady);
 }
 
-export async function publishSaveEvent(event) {
+async function publishTo(channel, event, what) {
     try {
         const client = getRedis();
         // A freshly started process (e.g. the standalone worker) may publish its
         // first event a moment before the connection is up.
         await whenReady(client, 3000);
-        await withTimeout(client.publish(SAVE_EVENTS_CHANNEL, JSON.stringify(event)), 3000, "publish");
+        await withTimeout(client.publish(channel, JSON.stringify(event)), 3000, "publish");
+        return true;
     } catch (err) {
-        // Never fail a save because a progress ping couldn't be sent — the client
-        // also polls the job status as a safety net.
-        logToFile(`[Queue] could not publish save event: ${err.message}`);
+        logToFile(`[Queue] could not publish ${what}: ${err.message}`);
+        return false;
     }
+}
+
+export async function publishSaveEvent(event) {
+    // Never fail a save because a progress ping couldn't be sent - the client
+    // also polls the job status as a safety net.
+    await publishTo(SAVE_EVENTS_CHANNEL, event, "save event");
+}
+
+/**
+ * Tell every API instance that `userId`'s access changed.
+ *   type "permissions-changed"  -> their browser re-fetches GET /permissions/me
+ *   type "session-revoked"      -> their browser is signed out and the socket is closed
+ * Best effort by design: the database write already happened and is the source
+ * of truth. If Redis is down the browser still catches up (it re-fetches on
+ * every WebSocket reconnect, on tab focus once the data is stale, and falls
+ * back to slow polling while the socket is down).
+ */
+export function publishPermissionEvent(type, userId) {
+    return publishTo(PERMISSION_EVENTS_CHANNEL, { type, userId: String(userId) }, `${type} event`);
 }
 
 export async function closeQueue() {

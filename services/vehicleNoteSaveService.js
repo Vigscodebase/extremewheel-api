@@ -5,6 +5,7 @@
 import crypto from "crypto";
 import VehicleNote, { MODIFICATION_OPTIONS } from "../models/VehicleNote.js";
 import { externalizeVehicleImages } from "../utils/vehicleImageStore.js";
+import { normalizeLookupOptionValue, quickAddVehicleLookupOption } from "../utils/vehicleLookupImporter.js";
 
 export class SaveError extends Error {
     constructor(status, message) {
@@ -124,6 +125,48 @@ export function pickUser(user) {
     return { _id: String(user._id), name: user.name, email: user.email, role: user.role };
 }
 
+// Which vehicle-note fields feed which dropdown list (models/VehicleLookupOption.js).
+const LOOKUP_OPTION_SOURCES = [
+    { kind: "submodel", fields: ["submodel"] },
+    { kind: "tire-size", fields: ["frontTireSize", "rearTireSize"] },
+    { kind: "wheel-offset", fields: ["frontWheelOffset", "rearWheelOffset"] },
+];
+const LOOKUP_OPTION_FIELDS = LOOKUP_OPTION_SOURCES.flatMap((s) => s.fields);
+
+/**
+ * Makes sure every Submodel / Tire size / Wheel offset value that was just saved
+ * on a vehicle is also a choice in the matching dropdown list.
+ *
+ * This used to be done only by the browser, after the save finished, and failures
+ * were swallowed — so a closed tab, a missed WebSocket message or a failed request
+ * left the vehicle holding a value that the dropdown didn't list (the dropdown then
+ * showed it as a lone "orphan" row with no delete button).
+ *
+ * Same rules as before: staff and admin only (they are the only roles that may
+ * grow the lists), and on an edit only values that actually CHANGED are added, so
+ * saving an old vehicle never brings back a value someone deleted from the list.
+ * Never throws — the vehicle itself is already saved.
+ */
+async function rememberLookupOptions(saved, previous, user) {
+    try {
+        if (!user || (user.role !== "staff" && user.role !== "admin")) return;
+        const wanted = new Map();
+        for (const { kind, fields } of LOOKUP_OPTION_SOURCES) {
+            for (const field of fields) {
+                const value = normalizeLookupOptionValue(kind, saved?.[field]);
+                if (!value) continue;
+                if (previous && normalizeLookupOptionValue(kind, previous[field]) === value) continue;
+                wanted.set(`${kind}|${value}`, { kind, value });
+            }
+        }
+        for (const { kind, value } of wanted.values()) {
+            await quickAddVehicleLookupOption(kind, value);
+        }
+    } catch (err) {
+        console.error(`[VehicleNotes] Couldn't add saved values to the dropdown lists: ${err.message}`);
+    }
+}
+
 /**
  * @param {object} job
  * @param {"create"|"update"} job.kind
@@ -159,7 +202,7 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
             }))
             : [];
 
-        return VehicleNote.create({
+        const created = await VehicleNote.create({
             _id: vehicleId,
             name: rest.name,
             make: rest.make,
@@ -185,6 +228,8 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
             ...(customerField.id && { customer: customerField.id }),
             createdBy: user._id,
         });
+        await rememberLookupOptions(created, null, user);
+        return created;
     }
 
     if (kind === "update") {
@@ -204,6 +249,8 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
         }
         const frontOffset = normalizeOffset(frontWheelOffset, "Front wheel offset");
         const rearOffset = normalizeOffset(rearWheelOffset, "Rear wheel offset");
+        // What the vehicle held before this save — see rememberLookupOptions().
+        const previous = await VehicleNote.findById(vehicleId).select(LOOKUP_OPTION_FIELDS.join(" ")).lean();
         const unset = {
             ...(customerField.clear && { customer: 1 }),
             ...(frontOffset === null && { frontWheelOffset: 1 }),
@@ -240,6 +287,7 @@ export async function saveVehicleNote({ kind, vehicleId, input: rawInput, custom
             { new: true }
         );
         if (!vehicle) throw new SaveError(404, "Vehicle not found.");
+        await rememberLookupOptions(vehicle, previous, user);
         return vehicle;
     }
 

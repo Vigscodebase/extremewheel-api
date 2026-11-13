@@ -2,6 +2,8 @@ import xlsx from "xlsx";
 import VehicleLookup from "../models/VehicleLookup.js";
 import VehicleLookupYear from "../models/VehicleLookupYear.js";
 import VehicleLookupMake from "../models/VehicleLookupMake.js";
+import VehicleLookupOption, { VEHICLE_LOOKUP_OPTION_KINDS } from "../models/VehicleLookupOption.js";
+import VehicleNote from "../models/VehicleNote.js";
 import { invalidatePrefix } from "../config/redis.js";
 import logToFile from "../logger.js";
 
@@ -263,4 +265,121 @@ export async function deleteVehicleLookupType(make, model, type) {
   const rows = await VehicleLookup.deleteMany(filter);
   await invalidatePrefix("vehicle-lookup:");
   return rows.deletedCount;
+}
+
+
+// --- Submodel / Tire size / Wheel offset dropdown lists --------------------
+// See models/VehicleLookupOption.js. Same rules as the Year list: staff and admin
+// grow and prune it (enforced on the routes), values already saved on vehicle
+// notes are never touched by a delete.
+
+export const isLookupOptionKind = (kind) => VEHICLE_LOOKUP_OPTION_KINDS.includes(kind);
+
+/**
+ * Canonical stored form of a list value, or `null` when it isn't acceptable for
+ * that kind. Mirrors what the Add / Edit vehicle form and the save service accept,
+ * so a value that can be picked from a list can always be saved on a vehicle.
+ *   submodel     -> trimmed text, max 80 characters
+ *   tire-size    -> "205/55R16" | "205-55-16" -> "205 55 16" (width 105-495, aspect 20-95, rim 10-30)
+ *   wheel-offset -> whole number of mm between -200 and 200, as text ("-12")
+ */
+export function normalizeLookupOptionValue(kind, raw) {
+  const text = typeof raw === "string" || typeof raw === "number" ? String(raw).trim() : "";
+  if (!text) return null;
+
+  if (kind === "submodel") return text.slice(0, 80);
+
+  if (kind === "tire-size") {
+    const nums = text.match(/\d+/g) || [];
+    const [w, a, r] = nums.map(Number);
+    const ok = nums.length === 3 && w >= 105 && w <= 495 && a >= 20 && a <= 95 && r >= 10 && r <= 30;
+    return ok ? `${w} ${a} ${r}` : null;
+  }
+
+  if (kind === "wheel-offset") {
+    if (!/^-?\d{1,3}$/.test(text)) return null;
+    const n = Number(text);
+    return n >= -200 && n <= 200 ? String(n) : null;
+  }
+
+  return null;
+}
+
+// Numeric order for sizes / offsets (205 55 16 before 225 45 17; -12 before 5),
+// alphabetical for submodels.
+function compareLookupOptions(kind, a, b) {
+  if (kind === "submodel") return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+  if (kind === "wheel-offset") return Number(a) - Number(b);
+  const pa = String(a).split(" ").map(Number);
+  const pb = String(b).split(" ").map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (pa[i] !== pb[i]) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+/** Every value of one list, in display order. */
+export async function listVehicleLookupOptions(kind) {
+  const values = await VehicleLookupOption.distinct("value", { kind });
+  return values.filter(Boolean).sort((a, b) => compareLookupOptions(kind, a, b));
+}
+
+/** Adds one value to a list; adding one that exists is a harmless no-op. */
+export async function quickAddVehicleLookupOption(kind, value) {
+  await VehicleLookupOption.updateOne({ kind, value }, { $setOnInsert: { kind, value } }, { upsert: true });
+  await invalidatePrefix("vehicle-lookup:");
+}
+
+/** Removes one value from a list. Resolves to how many were removed (0 = not found). */
+export async function deleteVehicleLookupOption(kind, value) {
+  const rows = await VehicleLookupOption.deleteOne({ kind, value });
+  await invalidatePrefix("vehicle-lookup:");
+  return rows.deletedCount;
+}
+
+// Which vehicle-note field(s) feed which list when seeding.
+const OPTION_SEED_SOURCES = [
+  { kind: "submodel", fields: ["submodel"] },
+  { kind: "tire-size", fields: ["frontTireSize", "rearTireSize"] },
+  { kind: "wheel-offset", fields: ["frontWheelOffset", "rearWheelOffset"] },
+];
+
+/**
+ * Fills the Submodel / Tire size / Wheel offset lists with the values already on
+ * saved vehicle notes. Upserts only — never removes anything. Resolves to the
+ * number of values added.
+ */
+export async function seedVehicleLookupOptionsFromNotes() {
+  let added = 0;
+  for (const { kind, fields } of OPTION_SEED_SOURCES) {
+    const found = new Set();
+    for (const field of fields) {
+      const values = await VehicleNote.distinct(field);
+      for (const raw of values) {
+        const value = normalizeLookupOptionValue(kind, raw);
+        if (value) found.add(value);
+      }
+    }
+    if (found.size === 0) continue;
+    const result = await VehicleLookupOption.bulkWrite(
+      [...found].map((value) => ({
+        updateOne: { filter: { kind, value }, update: { $setOnInsert: { kind, value } }, upsert: true },
+      })),
+      { ordered: false }
+    );
+    added += result.upsertedCount;
+  }
+  if (added > 0) await invalidatePrefix("vehicle-lookup:");
+  return added;
+}
+
+/**
+ * Run at startup: when the three lists have never been filled (the collection is
+ * completely empty), seed them from the existing vehicle notes so the dropdowns
+ * aren't empty on first use. Once any value exists this does nothing, so values
+ * that staff delete later never come back by themselves.
+ */
+export async function seedVehicleLookupOptionsIfEmpty() {
+  if ((await VehicleLookupOption.estimatedDocumentCount()) > 0) return 0;
+  return seedVehicleLookupOptionsFromNotes();
 }

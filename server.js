@@ -44,7 +44,7 @@ import { queryTerms } from "./utils/searchTokens.js";
 import { storeImage, uploadRoot } from "./utils/vehicleImageStore.js";
 import { importOeTireSizeWorkbook, buildOeTireSizeWorkbook, fetchAllOeTireSizesForExport } from "./utils/oeTireSizeExcel.js";
 // Background saving for Vehicle Notes (Redis + BullMQ worker + WebSocket).
-import { getQueue, isRedisReady, closeQueue } from "./config/queue.js";
+import { getQueue, isRedisReady, closeQueue, publishPermissionEvent } from "./config/queue.js";
 import { enqueueVehicleNoteSave, getVehicleNoteSaveStatus } from "./queues/vehicleNoteQueue.js";
 import { startVehicleNoteWorker } from "./workers/vehicleNoteWorker.js";
 import { attachSocketServer, issueWsTicket } from "./realtime/socketServer.js";
@@ -67,6 +67,13 @@ import {
     deleteVehicleLookupModel,
     deleteVehicleLookupType,
     deleteVehicleLookupYear,
+    isLookupOptionKind,
+    normalizeLookupOptionValue,
+    listVehicleLookupOptions,
+    quickAddVehicleLookupOption,
+    deleteVehicleLookupOption,
+    seedVehicleLookupOptionsIfEmpty,
+    seedVehicleLookupOptionsFromNotes,
 } from "./utils/vehicleLookupImporter.js";
 
 dotenv.config({ debug: true });
@@ -132,6 +139,14 @@ app.use(apiLimiter);
 
 const initializeApp = async () => {
     await connectDB();
+    // First start after the Submodel / Tire size / Wheel offset dropdowns were added:
+    // fill them from the vehicle notes that already exist. Never blocks startup.
+    try {
+        const seeded = await seedVehicleLookupOptionsIfEmpty();
+        if (seeded > 0) logToFile(`[VehicleLookup] ✅ Seeded ${seeded} submodel / tire size / wheel offset value(s) from existing vehicle notes`);
+    } catch (error) {
+        logToFile(`[VehicleLookup] ⚠️ Couldn't seed the dropdown lists: ${error.message}`);
+    }
     try {
         await User.createIndexes();
         logToFile(`[DB] ✅ User unique indexes verified/created`);
@@ -289,6 +304,8 @@ authRouter.post("/reset-password", authLimiter, async (req, res, next) => {
         user.resetPasswordTokenHash = undefined;
         user.resetPasswordExpires = undefined;
         await user.save();
+        // The pre-save hook just revoked every older token; sign those devices out now.
+        publishPermissionEvent("session-revoked", user._id);
 
         res.json({ message: "Password updated. You can now sign in." });
     } catch (err) { next(err); }
@@ -505,7 +522,11 @@ userRouter.put("/:id", requireAuth, async (req, res, next) => {
         if (name) user.name = name;
         if (role) user.role = role;
         if (password) user.password = password;
+        // Same condition the User model's pre-save hook uses to revoke old tokens.
+        const sessionsRevoked = user.isModified("password") || user.isModified("email") || user.isModified("role");
         await user.save();
+        // Push to that user's open browsers (fire-and-forget: the save above is the truth).
+        publishPermissionEvent(sessionsRevoked ? "session-revoked" : "permissions-changed", user._id);
         res.json({ user, permissionsReset });
     } catch (err) { next(err); }
 });
@@ -537,6 +558,7 @@ userRouter.delete("/:id", requireAuth, async (req, res, next) => {
         }
 
         await User.findByIdAndDelete(target._id);
+        publishPermissionEvent("session-revoked", target._id);
         res.json({ success: true });
     } catch (err) {
         next(err);
@@ -559,6 +581,11 @@ permissionRouter.get("/me", requireAuth, async (req, res, next) => {
         if (!access) {
             return res.status(401).json({ message: "Not authorized, this account no longer exists." });
         }
+        // Per-user data: never storable by a shared cache. "no-cache" still lets the
+        // browser keep a copy and revalidate it (Express adds the ETag), so a
+        // refetch that finds nothing changed costs a 304, not a body.
+        res.set("Cache-Control", "private, no-cache");
+        res.vary("Authorization");
         res.json({
             email: access.email,
             isAdmin: access.isAdmin,
@@ -610,6 +637,9 @@ permissionRouter.put("/users/:id", requireAuth, requirePermission("user-manageme
         if (!updated) {
             return res.status(409).json({ message: "This user's email has changed. Reload the page and review their access again." });
         }
+
+        // Tell that person's open browsers to re-read their access right now.
+        publishPermissionEvent("permissions-changed", updated._id);
 
         res.json({
             user: { _id: updated._id, name: updated.name, email: updated.email, role: updated.role, permissions: updated.permissions },
@@ -1404,7 +1434,7 @@ const isDatabaseTransfer = (req) =>
     (req.method === "GET" && req.path === "/export") || (req.method === "POST" && req.path === "/import");
 vehicleLookupRouter.use(requireAuth, (req, res, next) => {
     if (isDatabaseTransfer(req)) return next();
-    const isListRead = req.method === "GET" && ["/models", "/types", "/years"].includes(req.path);
+    const isListRead = req.method === "GET" && ["/models", "/types", "/years", "/options"].includes(req.path);
     return (isListRead ? lookupReadGuard : lookupFullGuard)(req, res, next);
 });
 
@@ -1448,6 +1478,20 @@ vehicleLookupRouter.get("/years", async (req, res, next) => {
             )
         );
         res.json({ years });
+    } catch (err) { next(err); }
+});
+
+// Submodel / Tire size / Wheel offset dropdown lists (see models/VehicleLookupOption.js).
+// GET /vehicle-lookup/options?kind=submodel|tire-size|wheel-offset -> { options: [...] }
+// Readable by the same roles as the Year list above.
+vehicleLookupRouter.get("/options", async (req, res, next) => {
+    try {
+        const kind = typeof req.query.kind === "string" ? req.query.kind : "";
+        if (!isLookupOptionKind(kind)) return res.status(400).json({ message: "Unknown list." });
+        const options = await cached(`vehicle-lookup:options:${kind}`, VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
+            listVehicleLookupOptions(kind)
+        );
+        res.json({ options });
     } catch (err) { next(err); }
 });
 
@@ -1498,6 +1542,20 @@ vehicleLookupRouter.post("/quick-add-year", requireStaffOrAdminOnly, async (req,
         if (!year) return res.status(400).json({ message: "year is required." });
         await quickAddVehicleLookupYear(String(year).trim());
         res.json({ ok: true });
+    } catch (err) { next(err); }
+});
+
+// Same idea for the Submodel / Tire size / Wheel offset lists — staff and admin
+// only, like Make / Model / Type / Year. The value is normalised and validated per
+// list (a tire size must be width / aspect / rim, an offset a whole number of mm).
+vehicleLookupRouter.post("/quick-add-option", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const kind = typeof req.body?.kind === "string" ? req.body.kind : "";
+        if (!isLookupOptionKind(kind)) return res.status(400).json({ message: "Unknown list." });
+        const value = normalizeLookupOptionValue(kind, req.body?.value);
+        if (!value) return res.status(400).json({ message: "That value isn't valid for this list." });
+        await quickAddVehicleLookupOption(kind, value);
+        res.json({ ok: true, value });
     } catch (err) { next(err); }
 });
 
@@ -1569,6 +1627,32 @@ vehicleLookupRouter.delete("/year", requireStaffOrAdminOnly, async (req, res, ne
         const removed = await deleteVehicleLookupYear(year);
         if (!removed) return res.status(404).json({ message: "Year not found." });
         res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
+// Removes one value from the Submodel / Tire size / Wheel offset lists. Nothing
+// cascades, and vehicle notes already saved keep the value they were saved with.
+vehicleLookupRouter.delete("/option", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const kind = queryString(req.query.kind);
+        if (!isLookupOptionKind(kind)) return res.status(400).json({ message: "Unknown list." });
+        const value = queryString(req.query.value);
+        if (!value) return res.status(400).json({ message: "value is required." });
+        const removed = await deleteVehicleLookupOption(kind, value);
+        if (!removed) return res.status(404).json({ message: "Value not found." });
+        res.json({ ok: true, removed });
+    } catch (err) { next(err); }
+});
+
+// One-off catch-up: adds every Submodel / Tire size / Wheel offset value that is
+// already saved on a vehicle note to the dropdown lists (it only ever ADDS). Saving
+// a vehicle now does this by itself; this is for values saved before that, which
+// otherwise show in the edit form as a lone row that isn't really in the list.
+// Don't call it routinely — values someone deleted from a list would come back.
+vehicleLookupRouter.post("/sync-options", requireStaffOrAdminOnly, async (req, res, next) => {
+    try {
+        const added = await seedVehicleLookupOptionsFromNotes();
+        res.json({ ok: true, added });
     } catch (err) { next(err); }
 });
 
@@ -2475,6 +2559,32 @@ reportsRouter.get("/export", requirePermission("reports.download"), async (req, 
 app.use("/auth", express.json({ limit: process.env.AUTH_BODY_LIMIT || "10kb" }), ensureBody, rejectOperatorKeys, authRouter);
 
 app.use(requireAuth);
+
+// One-time ticket for the live-update WebSocket (/ws): permission changes, background
+// save progress... The browser can't send an Authorization header on a WebSocket, so
+// it trades its normal login for a random 30-second ticket here and puts that in the
+// ws:// URL instead. Needs a login only - NOT a page permission - because a person
+// whose access was just taken away must still be told so. Registered before the JSON
+// parser: it takes no body.
+const ticketLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.WS_TICKET_RATE_LIMIT_MAX) || 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => String(req.user?._id || "anonymous"),
+    message: { message: "Too many live-update connection attempts. Please wait a moment." },
+});
+app.post("/realtime/ticket", ticketLimiter, async (req, res) => {
+    try {
+        if (!isRedisReady()) return res.status(503).json({ message: "Live updates are unavailable right now." });
+        res.set("Cache-Control", "no-store");
+        res.json({ ticket: await issueWsTicket(req.user) });
+    } catch (err) {
+        logToFile(`[Realtime] ticket failed: ${err.message}`);
+        res.status(503).json({ message: "Live updates are unavailable right now." });
+    }
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(ensureBody);
 app.use(rejectOperatorKeys);
