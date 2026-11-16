@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import path from "path";
-import helmet from "helmet";
+import { securityHeaders, cspReportRouter } from "./middleware/csp.js";
 import compression from "compression";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
@@ -84,7 +84,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 app.use(compression());
-app.use(helmet());
+// helmet's standard security headers + a strict Content-Security-Policy for the
+// API (see middleware/csp.js; CSP_ENABLED / CSP_REPORT_ONLY / CSP_REPORT_URI in .env).
+app.use(securityHeaders());
 
 // CORS is opt-in: unset CORS_ORIGINS (the default) keeps the current
 // same-origin-only behavior exactly as before. Set a comma-separated list
@@ -2557,6 +2559,10 @@ reportsRouter.get("/export", requirePermission("reports.download"), async (req, 
 //     authorization (requirePermission / requireAnyPermission / role checks).
 //  3. Only authenticated callers reach the 50 MB JSON parser and /uploads.
 app.use("/auth", express.json({ limit: process.env.AUTH_BODY_LIMIT || "10kb" }), ensureBody, rejectOperatorKeys, authRouter);
+
+// Browsers POST Content-Security-Policy violation reports here. Public on purpose
+// (the browser, not the app, sends them, with no token); 20 kb body limit, logged only.
+app.use(cspReportRouter);
 
 app.use(requireAuth);
 
