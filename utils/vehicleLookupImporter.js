@@ -6,6 +6,7 @@ import VehicleLookupOption, { VEHICLE_LOOKUP_OPTION_KINDS } from "../models/Vehi
 import VehicleNote from "../models/VehicleNote.js";
 import { invalidatePrefix } from "../config/redis.js";
 import logToFile from "../logger.js";
+import { isValidModelYear } from "./modelYear.js";
 
 // Source sheet ("vehicle notes database.xlsx", Sheet1) columns are:
 //   make | model | notes | category | Edit | Delete
@@ -108,7 +109,8 @@ export function parseVehicleLookupWorkbook(buffer) {
       mapped[field] = typeof value === "string" ? value.trim() : value;
     });
 
-    if (mapped.year !== undefined && mapped.year !== null && String(mapped.year).trim() !== "") {
+    // Only years in the allowed 1950–2030 range feed the Year dropdown.
+    if (isValidModelYear(mapped.year)) {
       years.add(String(mapped.year).trim());
     }
 
@@ -190,6 +192,7 @@ export async function quickAddVehicleLookup({ make, model, type }) {
 
 /** Same idea as quickAddVehicleLookup, for the independent Year dropdown. */
 export async function quickAddVehicleLookupYear(year) {
+  if (!isValidModelYear(year)) return;
   await VehicleLookupYear.updateOne({ year }, { $setOnInsert: { year } }, { upsert: true });
   await invalidatePrefix("vehicle-lookup:");
 }

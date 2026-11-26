@@ -37,6 +37,7 @@ import { signToken } from "./utils/jwt.js";
 import { cached, invalidatePrefix, connectCache } from "./config/redis.js";
 import { tireToleranceLimits } from "./utils/tireMath.js";
 import { parseCsv, toCsv } from "./utils/csv.js";
+import { isValidModelYear, modelYearProblem } from "./utils/modelYear.js";
 import { parseCustomerInput } from "./utils/customerFields.js";
 import { upsertOeTireSize } from "./utils/oeTireSizeService.js";
 import { keysetPage, suggest, pageRoute, parseLimit, cleanQuery, cleanString } from "./utils/pagination.js";
@@ -1331,7 +1332,7 @@ savedComparisonRouter.get("/facets", requirePermission("tire-comparison"), pageR
         makes: makes.filter(Boolean).sort(text),
         models: models.filter(Boolean).sort(text),
         types: types.filter(Boolean).sort(text),
-        years: years.map(Number).filter((y) => Number.isFinite(y) && y > 0).sort((a, b) => a - b),
+        years: years.filter(isValidModelYear).map(Number).sort((a, b) => a - b),
     });
 }));
 
@@ -1342,6 +1343,8 @@ savedComparisonRouter.post("/", requirePermission("tire-comparison.save"), async
         if (!name || !make || !model || !type) {
             return res.status(400).json({ message: "Vehicle name, make, model and type are required." });
         }
+        const yearMessage = modelYearProblem(year);
+        if (yearMessage) return res.status(400).json({ message: yearMessage });
         const a = parseComparisonTire(tireA);
         const b = parseComparisonTire(tireB);
         if (!a || !b) {
@@ -1472,7 +1475,7 @@ vehicleLookupRouter.get("/years", async (req, res, next) => {
     try {
         const years = await cached("vehicle-lookup:years", VEHICLE_LOOKUP_CACHE_TTL_SECONDS, () =>
             VehicleLookupYear.distinct("year").then((y) =>
-                y.filter(Boolean).sort((a, b) => {
+                y.filter(isValidModelYear).sort((a, b) => {
                     const na = Number(a), nb = Number(b);
                     if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
                     return String(a).localeCompare(String(b));
@@ -1542,6 +1545,8 @@ vehicleLookupRouter.post("/quick-add-year", requireStaffOrAdminOnly, async (req,
     try {
         const { year } = req.body;
         if (!year) return res.status(400).json({ message: "year is required." });
+        const yearMessage = modelYearProblem(year);
+        if (yearMessage) return res.status(400).json({ message: yearMessage });
         await quickAddVehicleLookupYear(String(year).trim());
         res.json({ ok: true });
     } catch (err) { next(err); }

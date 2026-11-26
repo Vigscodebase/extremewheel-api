@@ -5,6 +5,7 @@
 import crypto from "crypto";
 import VehicleNote, { MODIFICATION_OPTIONS } from "../models/VehicleNote.js";
 import { externalizeVehicleImages } from "../utils/vehicleImageStore.js";
+import { modelYearProblem } from "../utils/modelYear.js";
 import { normalizeLookupOptionValue, quickAddVehicleLookupOption } from "../utils/vehicleLookupImporter.js";
 
 export class SaveError extends Error {
@@ -108,6 +109,8 @@ export function pickVehicleInput(body) {
  * instead of failing later in the background worker. Returns a message or "".
  */
 export function validateVehicleInput(input) {
+    const yearMessage = modelYearProblem(input.year);
+    if (yearMessage) return yearMessage;
     try {
         normalizeTireSize(input.frontTireSize);
         normalizeTireSize(input.rearTireSize);
